@@ -84,7 +84,9 @@ if __name__ == '__main__':
         X, y, u = enc[a.split]
         m = B.FM(dim, k=16, lr=0.001, seed=0)
         rng = np.random.default_rng(0)
-        best, state, bad = -1, None, 0
+        best = -1
+        state = (m.V.copy(), m.W.copy(), m.b)
+        bad = 0
         for ep in range(40):
             idx = rng.permutation(len(ytr))
             for i in range(0, len(idx), 8192):
