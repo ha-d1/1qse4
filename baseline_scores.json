@@ -85,7 +85,7 @@
         "nDCG@5": 0.7289,
         "primary": 0.8645
       },
-      "note": "用真实标签当预测分得到的理论上限。nDCG 上限 < 1.0，因为 27.1% 的 test 用户全负(nDCG 恒=0，任何模型都救不了)。评估进展请以此为分母。"
+      "note": "The theoretical ceiling obtained by using true labels as prediction scores. The nDCG ceiling is < 1.0 because 27.1% of test users are all-negative (nDCG is always 0 and no model can improve it). Use this as the denominator when tracking progress."
     }
   },
   "test_set_composition": {
@@ -93,6 +93,6 @@
     "all_negative_pct": 27.1,
     "all_positive_pct": 9.2,
     "discriminative_pct": 63.7,
-    "note": "全负与全正用户(合计 36.3%)的 nDCG 与模型无关；GAUC 只统计有区分度的 63.7%。"
+    "note": "The nDCG of all-negative and all-positive users (36.3% combined) is independent of the model; GAUC includes only the 63.7% of users with meaningful distinctions."
   }
 }
