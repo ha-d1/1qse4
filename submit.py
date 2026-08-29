@@ -19,7 +19,7 @@ Usage:
     python3 submit.py --score  submission.csv     # Validate and score (local valid split only)
 """
 import argparse, csv, sys
-from data import load, encode
+from data import load
 from evaluate import evaluate
 
 HEADER = ['row_id', 'user_id', 'video_id', 'score']
@@ -76,27 +76,9 @@ if __name__ == '__main__':
     rows = splits[a.split]
 
     if a.make:
-        from baseline import run_fm
-        import baseline as B, numpy as np
-        enc, dim = encode(splits)
-        Xtr, ytr, _ = enc['train']
-        Xva, yva, uva = enc['valid']
-        X, y, u = enc[a.split]
-        m = B.FM(dim, k=16, lr=0.001, seed=0)
-        rng = np.random.default_rng(0)
-        best = -1
-        state = (m.V.copy(), m.W.copy(), m.b)
-        bad = 0
-        for ep in range(40):
-            idx = rng.permutation(len(ytr))
-            for i in range(0, len(idx), 8192):
-                m.step(Xtr[idx[i:i+8192]], ytr[idx[i:i+8192]])
-            p = evaluate(uva, yva, m.predict(Xva))['primary']
-            if p > best + 1e-5: best, bad, state = p, 0, (m.V.copy(), m.W.copy(), m.b)
-            else:
-                bad += 1
-                if bad >= 4: break
-        m.V, m.W, m.b = state
+        from baseline import fit_fm
+        m, enc = fit_fm(splits, seed=0, verbose=False)
+        X, _, _ = enc[a.split]
         write_submission(a.path, rows, m.predict(X))
         print(f"Wrote {a.path}: {len(rows):,d} rows (split={a.split}, official FM baseline)")
     else:

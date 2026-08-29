@@ -4,6 +4,7 @@
 # Downloaded competition data
 KuaiRand-Pure/
 
+KuaiRand-Pure.tar.gz
 # Python caches
 __pycache__/
 *.py[cod]
@@ -12,6 +13,8 @@ __pycache__/
 submission.csv
 valid_submission.csv
 *.log
+.agent-runs/
+.agent-worktrees/
 
 # Local environment files
 .env

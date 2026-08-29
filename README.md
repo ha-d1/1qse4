@@ -25,6 +25,27 @@ python3 baseline.py --model fm
 `--model` can be `fm` (official baseline) / `pop` (trivial baseline) / `random` (lower bound, for checking the evaluation code).
 FM takes about 40 seconds in total (single-threaded CPU).
 
+## Agentic Experiment Loop
+
+The optional controller snapshots the current checkout into isolated Git worktrees, profiles the
+dataset, reproduces three FM validation seeds, and then runs an inspect → experiment → reflect loop.
+The default candidate boundary remains NumPy-only; preinstalled LightGBM is available to candidates
+when installed from `requirements-agent.txt`. The controller never installs packages.
+
+```bash
+export AGENT_API_KEY=...
+export AGENT_API_BASE=https://provider.example/v1
+export AGENT_MODEL=model-name
+python3 agent.py run --campaign kuairand-v1 --data_dir ./KuaiRand-Pure/data
+python3 agent.py status --campaign kuairand-v1
+python3 agent.py resume --campaign kuairand-v1
+```
+
+Campaign state, patches, structured run records, logs, and the checked final submission are written
+under `.agent-runs/<campaign>/`. Candidate worktrees under `.agent-worktrees/` are disposable. The
+main checkout is not modified. `resume` requires the original dataset fingerprint, API base, model,
+and persisted limits.
+
 ## Task Definition (the conventions are fixed; do not change them)
 
 | | |
@@ -160,3 +181,10 @@ as long as you ultimately pass `scores` to `evaluate()`. **The scoring conventio
 | `baseline_scores.json` | Officially published scores + seed variance + convergence parameters. |
 | `submit.py` | Generate / validate submission files. |
 | `ablation_features.py` | Feature ablation experiment that reproduces the “adding features produces no gain” numbers. |
+| `solution.py` | Model-editable `score(...)` candidate entry point; initially reproduces the FM. |
+| `experiment.py` | Trusted data profiler, candidate runner, score validator, and ensemble submission writer. |
+| `agent.py` | Campaign CLI and inspect → experiment → reflect controller. |
+| `agent_api.py` | Standard-library OpenAI-compatible chat-completions client. |
+| `agent_sandbox.py` | Git worktree, patch-policy, resource-limit, and subprocess boundary. |
+| `agent_state.py` | Locked atomic campaign state and artifact persistence. |
+| `test_agent.py` | Deterministic temporary-data/repository integration and fault tests. |

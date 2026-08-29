@@ -72,9 +72,10 @@ class FM:
     def predict(self, X, bs=200_000):
         return np.concatenate([self.logits(X[i:i + bs])[0] for i in range(0, len(X), bs)])
 
-def run_fm(splits, k=16, lr=0.001, epochs=40, bs=8192, patience=4, seed=0, verbose=True):
+def fit_fm(splits, k=16, lr=0.001, epochs=40, bs=8192, patience=4, seed=0, verbose=True):
+    """Train an FM and restore its best validation checkpoint."""
     enc, dim = encode(splits)
-    Xtr, ytr, _ = enc['train']; Xva, yva, uva = enc['valid']; Xte, yte, ute = enc['test']
+    Xtr, ytr, _ = enc['train']; Xva, yva, uva = enc['valid']
     m = FM(dim, k=k, lr=lr, seed=seed)
     rng = np.random.default_rng(seed)
     best, best_state, bad = -1, None, 0
@@ -94,6 +95,12 @@ def run_fm(splits, k=16, lr=0.001, epochs=40, bs=8192, patience=4, seed=0, verbo
                 if verbose: print(f"  early stop at epoch {ep}")
                 break
     m.V, m.W, m.b = best_state
+    return m, enc
+
+def run_fm(splits, k=16, lr=0.001, epochs=40, bs=8192, patience=4, seed=0, verbose=True):
+    m, enc = fit_fm(splits, k=k, lr=lr, epochs=epochs, bs=bs, patience=patience,
+                    seed=seed, verbose=verbose)
+    Xva, yva, uva = enc['valid']; Xte, yte, ute = enc['test']
     return {'valid': evaluate(uva, yva, m.predict(Xva)),
             'test':  evaluate(ute, yte, m.predict(Xte))}
 
