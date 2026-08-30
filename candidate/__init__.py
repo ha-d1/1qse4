@@ -1,0 +1,1 @@
+"""Agent-editable candidate implementation."""

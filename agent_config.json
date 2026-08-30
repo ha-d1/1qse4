@@ -1,0 +1,38 @@
+{
+  "benchmark": {
+    "name": "KuaiRand-Pure",
+    "label": "long_view",
+    "metrics": ["GAUC", "nDCG@5"],
+    "primary": "mean(GAUC, nDCG@5)",
+    "official_valid_primary": 0.6016
+  },
+  "paths": {
+    "data_dir": "./KuaiRand-Pure/data",
+    "runs_dir": "./runs",
+    "candidate_dir": "./candidate"
+  },
+  "llm": {
+    "provider": "gemini",
+    "model": "gemini-2.5-flash",
+    "temperature": 0.2,
+    "max_attempts": 3
+  },
+  "budget": {
+    "epsilon": 0.002,
+    "consecutive_non_improving_iterations": 3,
+    "max_iterations": 50,
+    "max_wall_clock_seconds": 21600,
+    "experiment_timeout_seconds": 1200,
+    "max_repair_attempts": 2
+  },
+  "safety": {
+    "development_splits": ["train", "valid"],
+    "protected_files": [
+      "evaluate.py",
+      "data.py",
+      "baseline.py",
+      "submit.py"
+    ],
+    "mutable_roots": ["candidate"]
+  }
+}

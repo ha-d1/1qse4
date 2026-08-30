@@ -22,8 +22,29 @@ python3 baseline.py --model fm
 
 `--data_dir` defaults to `./KuaiRand-Pure/data`; specify it explicitly when the data is elsewhere.
 
-`--model` can be `fm` (official baseline) / `pop` (trivial baseline) / `random` (lower bound, for checking the evaluation code).
+`--model` can be `fm` (official baseline) / `bpr` (pairwise candidate) / `pop` (trivial baseline) / `random` (lower bound, for checking the evaluation code).
 FM takes about 40 seconds in total (single-threaded CPU).
+
+## Autonomous Research Agent
+
+The agent foundation uses the official Google Gen AI SDK directly; LangChain is not required. Development code is deliberately limited to labelled `train` and `valid` data. Test rows are exposed without labels only for the final prediction stage.
+
+Install and verify the protected baseline:
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 -m unittest discover -s tests -v
+python3 verify_baseline.py
+```
+
+Set the API key without writing it into source code, then start with one bounded iteration:
+
+```bash
+export GEMINI_API_KEY="YOUR_KEY"
+python3 agent.py --max-iterations 1
+```
+
+The full run is bounded by `agent_config.json`: at most 50 iterations, six hours, and convergence after three consecutive iterations without an improvement greater than 0.002. Gemini may propose unified-diff changes only under `candidate/`; rejected or failed changes are rolled back. Each iteration records its hypothesis, patch, validation metrics, process output, errors, token usage, and wall-clock usage under `runs/`.
 
 ## Task Definition (the conventions are fixed; do not change them)
 
