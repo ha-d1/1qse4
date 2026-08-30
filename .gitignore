@@ -1,0 +1,19 @@
+# Local Python runtime
+.python/
+
+# Downloaded competition data
+KuaiRand-Pure/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Generated submissions and experiment outputs
+submission.csv
+valid_submission.csv
+*.log
+
+# Local environment files
+.env
+.venv/
+venv/
