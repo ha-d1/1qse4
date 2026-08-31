@@ -12,7 +12,36 @@ import numpy as np
 from data import load_selected
 from development_data import remove_labels
 from evaluate import evaluate
-from make_submission import score_unlabelled_rows, within_user_rank_average
+from make_submission import (
+    score_unlabelled_rows,
+    within_user_rank_average,
+    within_user_rank_weighted_average,
+)
+
+
+GROUP_WEIGHT_CANDIDATES = (
+    (5.0, 3.0, 1.0),  # current equal-checkpoint ensemble
+    (4.0, 4.0, 1.0),
+    (4.0, 3.0, 2.0),
+    (5.0, 4.0, 1.0),
+    (5.0, 3.0, 2.0),
+    (6.0, 3.0, 1.0),
+)
+
+
+def checkpoint_weights_from_group_totals(feature_sets, group_totals):
+    """Distribute fixed base/hour/session mass equally inside each model family."""
+    group_names = ("base", "hour", "session")
+    if len(group_totals) != len(group_names):
+        raise ValueError("Expected base, hour, and session group totals")
+    counts = {name: feature_sets.count(name) for name in group_names}
+    if any(counts[name] == 0 for name in group_names):
+        raise ValueError("Weighted temporal ensemble requires every model family")
+    totals = dict(zip(group_names, group_totals))
+    return np.asarray(
+        [totals[feature_set] / counts[feature_set] for feature_set in feature_sets],
+        dtype=np.float64,
+    )
 
 
 def within_user_zscore_average(score_arrays, users):
@@ -104,10 +133,12 @@ def validation_ensemble_results(checkpoints, data_dir, full_only=False):
     unlabelled_valid_rows = remove_labels(valid_rows)
     users = [row[1] for row in valid_rows]
     labels = np.asarray([row[6] for row in valid_rows], dtype=np.float32)
-    score_arrays = [
-        score_unlabelled_rows(checkpoint, train_rows, unlabelled_valid_rows)[0]
+    scored = [
+        score_unlabelled_rows(checkpoint, train_rows, unlabelled_valid_rows)
         for checkpoint in checkpoints
     ]
+    score_arrays = [item[0] for item in scored]
+    feature_sets = [item[1]["feature_set"] for item in scored]
     results = []
     sizes = (len(checkpoints),) if full_only else range(1, len(checkpoints) + 1)
     for size in sizes:
@@ -132,6 +163,28 @@ def validation_ensemble_results(checkpoints, data_dir, full_only=False):
                     }
                 )
     full_rank_scores = within_user_rank_average(score_arrays, users)
+    if set(feature_sets) == {"base", "hour", "session"}:
+        for group_totals in GROUP_WEIGHT_CANDIDATES:
+            weights = checkpoint_weights_from_group_totals(feature_sets, group_totals)
+            scores = within_user_rank_weighted_average(score_arrays, users, weights)
+            metrics = evaluate(users, labels, scores)
+            results.append(
+                {
+                    "aggregation": "fixed_group_weighted_rank_average",
+                    "members": list(range(len(checkpoints))),
+                    "checkpoints": [str(checkpoint) for checkpoint in checkpoints],
+                    "feature_sets": feature_sets,
+                    "group_totals": dict(
+                        zip(("base", "hour", "session"), group_totals)
+                    ),
+                    "weights": weights.tolist(),
+                    "metrics": {
+                        "GAUC": float(metrics["GAUC"]),
+                        "nDCG@5": float(metrics["nDCG@5"]),
+                        "primary": float(metrics["primary"]),
+                    },
+                }
+            )
     for mode in ("video", "personalized"):
         history_scores = train_history_scores(train_rows, valid_rows, mode)
         for alpha in (0.025, 0.05, 0.1, 0.2, 0.4):

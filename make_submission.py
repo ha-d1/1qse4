@@ -11,6 +11,11 @@ import numpy as np
 
 from baseline import FM
 from candidate.model import FieldWeightedFM
+from candidate.data import (
+    TEMPORAL_CROSS_FIELDS,
+    fit_feature_encoder as fit_candidate_encoder,
+    transform_rows as transform_candidate_rows,
+)
 from data import (
     FIELDS,
     HOUR_FIELDS,
@@ -29,6 +34,7 @@ FEATURE_SETS = {
     "weekday": WEEKDAY_FIELDS,
     "hour": HOUR_FIELDS,
     "session": SESSION_FIELDS,
+    "temporal_cross": TEMPORAL_CROSS_FIELDS,
     "user_author": USER_AUTHOR_FIELDS,
 }
 
@@ -40,8 +46,14 @@ def score_unlabelled_rows(checkpoint_path, train_rows, target_rows):
         feature_set = metadata["feature_set"]
         if feature_set not in FEATURE_SETS:
             raise ValueError(f"Unsupported final-inference feature set: {feature_set}")
-        encoder = fit_feature_encoder(train_rows, fields=FEATURE_SETS[feature_set])
-        X, labels, _ = transform_rows(target_rows, encoder, include_labels=False)
+        if feature_set == "temporal_cross":
+            encoder = fit_candidate_encoder(train_rows, fields=FEATURE_SETS[feature_set])
+            X, labels, _ = transform_candidate_rows(
+                target_rows, encoder, include_labels=False
+            )
+        else:
+            encoder = fit_feature_encoder(train_rows, fields=FEATURE_SETS[feature_set])
+            X, labels, _ = transform_rows(target_rows, encoder, include_labels=False)
         if labels is not None:
             raise AssertionError("Final inference must not materialise target labels")
         V = checkpoint["V"]
@@ -95,6 +107,35 @@ def within_user_rank_average(score_arrays, users):
     return combined
 
 
+def within_user_rank_weighted_average(score_arrays, users, weights):
+    """Combine normalized within-user ranks using fixed, label-free model weights."""
+    if not score_arrays:
+        raise ValueError("At least one score array is required")
+    expected = len(users)
+    if any(len(scores) != expected for scores in score_arrays):
+        raise ValueError("Every score array must align with the target rows")
+    weights = np.asarray(weights, dtype=np.float64)
+    if weights.shape != (len(score_arrays),):
+        raise ValueError("Provide exactly one ensemble weight per score array")
+    if not np.isfinite(weights).all() or np.any(weights < 0) or not float(weights.sum()):
+        raise ValueError("Ensemble weights must be finite, non-negative, and sum above zero")
+    weights = weights / weights.sum()
+    groups = collections.defaultdict(list)
+    for index, user in enumerate(users):
+        groups[user].append(index)
+    combined = np.zeros(expected, dtype=np.float32)
+    for scores, weight in zip(score_arrays, weights):
+        ranked = np.empty(expected, dtype=np.float32)
+        for indices in groups.values():
+            group = np.asarray(indices, dtype=np.int64)
+            order = np.argsort(
+                np.argsort(np.asarray(scores)[group], kind="stable"), kind="stable"
+            )
+            ranked[group] = order / max(1, len(group) - 1)
+        combined += ranked * np.float32(weight)
+    return combined
+
+
 def write_submission(path, rows, scores):
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -117,6 +158,12 @@ def main() -> None:
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument(
+        "--weight",
+        action="append",
+        type=float,
+        help="Optional fixed checkpoint weight; repeat once per --checkpoint.",
+    )
+    parser.add_argument(
         "--split",
         choices=["valid", "test"],
         default="valid",
@@ -132,11 +179,17 @@ def main() -> None:
     score_arrays = [item[0] for item in scored]
     metadata = scored[0][1]
     feature_sets = [item[1]["feature_set"] for item in scored]
+    if args.weight is not None and len(args.weight) != len(score_arrays):
+        parser.error("--weight must be repeated exactly once per --checkpoint")
     scores = (
         score_arrays[0]
         if len(score_arrays) == 1
-        else within_user_rank_average(
-            score_arrays, [row[1] for row in target_rows]
+        else (
+            within_user_rank_average(score_arrays, [row[1] for row in target_rows])
+            if args.weight is None
+            else within_user_rank_weighted_average(
+                score_arrays, [row[1] for row in target_rows], args.weight
+            )
         )
     )
     output = write_submission(args.output, target_rows, scores)
@@ -148,7 +201,14 @@ def main() -> None:
                 "rows": len(target_rows),
                 "split": args.split,
                 "checkpoints": args.checkpoint,
-                "ensemble": "within_user_rank_average" if len(scored) > 1 else None,
+                "ensemble": (
+                    "within_user_rank_average"
+                    if len(scored) > 1 and args.weight is None
+                    else "within_user_rank_weighted_average"
+                    if len(scored) > 1
+                    else None
+                ),
+                "weights": args.weight,
                 "feature_sets": feature_sets,
                 "target_labels_accessed": False,
             },

@@ -301,6 +301,36 @@ def build_research_context(
                     "scaffold passes the shared-parameter and removable-control preflights."
                 ),
             },
+            {
+                "direction": "fixed family weights for the nine-checkpoint rank ensemble",
+                "decision": "rejected on validation",
+                "evidence": {
+                    "candidates_evaluated": 6,
+                    "best_group_totals": {"base": 4, "hour": 3, "session": 2},
+                    "best_primary": 0.6051281690597534,
+                    "incumbent_primary": 0.6051324605941772,
+                },
+                "instruction": (
+                    "Do not tune more base/hour/session family weights on the same validation "
+                    "split; the small fixed grid did not improve equal checkpoint weighting."
+                ),
+            },
+            {
+                "direction": "weekday-hour and hour-session-position temporal crosses",
+                "decision": "rejected after seed-2 validation and ensemble check",
+                "evidence": {
+                    "seed_2_primary": 0.6046702861785889,
+                    "session_seed_2_primary": 0.6046835780143738,
+                    "best_ten_checkpoint_history_blend_primary": 0.6051959991455078,
+                    "incumbent_primary": 0.6051324605941772,
+                    "apparent_improvement": 0.0000635385513306,
+                    "significance_epsilon": 0.002,
+                },
+                "instruction": (
+                    "Do not run additional temporal-cross seeds. The tiny ensemble gain is far "
+                    "below the declared significance threshold and does not justify promotion."
+                ),
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",
@@ -348,6 +378,9 @@ def build_research_context(
                     "Learn one gate for each pair of the five categorical fields while preserving "
                     "the four-negative BPR objective and the incumbent feature encoding."
                 ),
+                "expected_effect": (
+                    "Test whether field-pair gates improve GAUC and nDCG@5 over standard FM."
+                ),
                 "target_files": ["candidate/model.py", "candidate/train.py"],
                 "seed_schedule": [0, 1, 2],
                 "command": [
@@ -375,7 +408,47 @@ def build_research_context(
                     "do not request a generated rewrite. Evaluate the supplied command as the "
                     "controlled alternative-interaction experiment."
                 ),
-            }
+                "local_preflight": {"status": "passed"},
+                "validation_decision": "completed and rejected",
+            },
+            "candidate-only temporal-cross FM scaffold": {
+                "implementation_mode": "scaffold",
+                "scientific_change": (
+                    "Add label-free weekday-hour and hour-session-position categorical crosses "
+                    "on top of the session feature set."
+                ),
+                "expected_effect": "Increase temporal representation diversity in FM ranking.",
+                "target_files": [
+                    "candidate/data.py",
+                    "candidate/model.py",
+                    "candidate/train.py",
+                ],
+                "seed_schedule": [2],
+                "command": [
+                    "python",
+                    "candidate/train.py",
+                    "--objective",
+                    "bpr",
+                    "--architecture",
+                    "fm",
+                    "--seed",
+                    "2",
+                    "--epochs",
+                    "40",
+                    "--k",
+                    "16",
+                    "--lr",
+                    "0.00025",
+                    "--negatives-per-positive",
+                    "4",
+                    "--batch-size",
+                    "8192",
+                    "--feature-set",
+                    "temporal_cross",
+                ],
+                "local_preflight": {"status": "passed"},
+                "validation_decision": "completed and rejected",
+            },
         },
         "constraints": [
             "train and validation only",
@@ -406,5 +479,6 @@ def build_research_context(
             "detached auxiliary heads are rejected; multitask gradients must update shared ranking parameters",
             "uniform BPR sampling beyond four negatives is rejected",
             "current-score hard-negative mining is rejected",
+            "fixed ensemble family weights and temporal crosses are rejected",
         ],
     }

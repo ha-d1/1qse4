@@ -33,6 +33,11 @@ from candidate.model import (
 )
 from baseline import FM
 from candidate.train import save_checkpoint
+from candidate.data import (
+    TEMPORAL_CROSS_FIELDS,
+    fit_feature_encoder as fit_candidate_encoder,
+    transform_rows as transform_candidate_rows,
+)
 from build_evidence_package import compact_iteration, latest_sustained_run
 from data import (
     FIELDS,
@@ -64,11 +69,19 @@ from development_data import (
 )
 from experiment_runner import ExperimentRunner
 from experiment_schema import ExperimentProposal
-from evaluate_ensemble import within_user_blend, within_user_zscore_average
+from evaluate_ensemble import (
+    checkpoint_weights_from_group_totals,
+    within_user_blend,
+    within_user_zscore_average,
+)
 from llm_common import parse_plan, parse_proposal, parse_reflection, redact_secrets
 from llm_common import SYSTEM_INSTRUCTION
 from llm_factory import create_llm_client
-from make_submission import score_unlabelled_rows, within_user_rank_average
+from make_submission import (
+    score_unlabelled_rows,
+    within_user_rank_average,
+    within_user_rank_weighted_average,
+)
 from generate_research_report import collect_report
 from patch_manager import PatchError, PatchManager
 from proposal_materializer import materialize_patch
@@ -77,6 +90,11 @@ from run_logger import RunLogger
 from run_agent_with_keychain import find_data_dir, load_soclaas_key
 from resource_tracker import ResourceTracker
 from soclaas_client import SoCLaaSClient
+from token_budget import (
+    TokenBudgetExceeded,
+    conservative_prompt_tokens,
+    reserve_output_tokens,
+)
 from verify_baseline import serialisable_metrics
 from verify_evidence_package import sha256, verify_evidence
 
@@ -220,6 +238,23 @@ class DevelopmentDataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "align"):
             within_user_rank_average([np.asarray([1.0])], ["u1", "u2"])
 
+    def test_weighted_rank_ensemble_respects_fixed_weights(self) -> None:
+        combined = within_user_rank_weighted_average(
+            [np.asarray([1.0, 2.0]), np.asarray([2.0, 1.0])],
+            ["u", "u"],
+            [3.0, 1.0],
+        )
+        np.testing.assert_allclose(combined, [0.25, 0.75])
+
+    def test_group_totals_distribute_mass_within_families(self) -> None:
+        weights = checkpoint_weights_from_group_totals(
+            ["base"] * 5 + ["hour"] * 3 + ["session"],
+            (4.0, 3.0, 2.0),
+        )
+        np.testing.assert_allclose(weights[:5], 0.8)
+        np.testing.assert_allclose(weights[5:8], 1.0)
+        np.testing.assert_allclose(weights[8:], 2.0)
+
     def test_within_user_zscore_ensemble_is_group_local(self) -> None:
         users = ["u1", "u1", "u2", "u2"]
         first = np.asarray([1.0, 2.0, 100.0, 200.0])
@@ -291,6 +326,48 @@ class DevelopmentDataTests(unittest.TestCase):
         np.testing.assert_array_equal(flipped_labels, [0.0, 1.0, 0.0])
         self.assertNotEqual(int(original[0, -1]), int(original[1, -1]))
         self.assertEqual(int(original[0, -1]), int(original[2, -1]))
+
+    def test_temporal_cross_features_are_candidate_only_and_label_independent(self) -> None:
+        train = [
+            (20220408, "u1", "v1", "a1", "t", 10.0, 1, 930, 1_000_000),
+            (20220408, "u1", "v2", "a2", "t", 20.0, 0, 930, 1_005_000),
+            (20220409, "u1", "v3", "a3", "t", 30.0, 1, 1030, 3_000_000),
+        ]
+        flipped = [row[:6] + (1 - row[6],) + row[7:] for row in train]
+        encoder = fit_candidate_encoder(train, fields=TEMPORAL_CROSS_FIELDS)
+        original, labels, _ = transform_candidate_rows(
+            train, encoder, include_labels=True
+        )
+        changed, flipped_labels, _ = transform_candidate_rows(
+            flipped, encoder, include_labels=True
+        )
+        self.assertEqual(original.shape, (3, len(TEMPORAL_CROSS_FIELDS)))
+        np.testing.assert_array_equal(original, changed)
+        np.testing.assert_array_equal(labels, [1.0, 0.0, 1.0])
+        np.testing.assert_array_equal(flipped_labels, [0.0, 1.0, 0.0])
+        self.assertNotEqual(int(original[0, -2]), int(original[2, -2]))
+
+    def test_temporal_cross_encoder_scores_unlabelled_rows(self) -> None:
+        train = [
+            (20220408, "u1", "v1", "a1", "t", 10.0, 1, 930, 1_000_000),
+            (20220408, "u1", "v2", "a2", "t", 20.0, 0, 945, 1_005_000),
+        ]
+        target = [(20220429, "u1", "v3", "a1", "t", 15.0, 1000, 2_000_000)]
+        encoder = fit_candidate_encoder(train, fields=TEMPORAL_CROSS_FIELDS)
+        model = FM(encoder["dimension"], k=2, lr=0.001, seed=3)
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = save_checkpoint(
+                Path(tmp) / "temporal.npz",
+                model,
+                {
+                    "feature_set": "temporal_cross",
+                    "architecture": "fm",
+                    "lr": 0.001,
+                },
+            )
+            scores, metadata = score_unlabelled_rows(checkpoint, train, target)
+        self.assertEqual(metadata["feature_set"], "temporal_cross")
+        self.assertEqual(scores.shape, (1,))
 
     def test_checkpoint_persists_weights_and_metadata(self) -> None:
         model = SimpleNamespace(
@@ -485,8 +562,33 @@ class ConvergenceTests(unittest.TestCase):
     def test_agent_budget_allows_one_bounded_same_iteration_repair(self) -> None:
         config = json.loads((PROJECT_ROOT / "agent_config.json").read_text())
         self.assertEqual(config["budget"]["max_repair_attempts"], 1)
-        self.assertEqual(config["budget"]["repair_token_reserve"], 14000)
         self.assertEqual(config["budget"]["max_llm_tokens_per_iteration"], 52000)
+        self.assertEqual(config["budget"]["llm_prompt_overhead_tokens"], 512)
+
+    def test_token_reservation_caps_output_before_provider_call(self) -> None:
+        reservation = reserve_output_tokens(
+            token_cap=10_000,
+            tokens_spent=4_000,
+            requested_output_tokens=5_000,
+            minimum_output_tokens=256,
+            prompt_parts=("x" * 2_000,),
+            overhead_tokens=500,
+        )
+        self.assertEqual(reservation["prompt_reservation"], 2_500)
+        self.assertEqual(reservation["output_reservation"], 3_500)
+        self.assertEqual(reservation["total_reservation"], 6_000)
+
+    def test_token_reservation_blocks_call_that_cannot_fit(self) -> None:
+        with self.assertRaises(TokenBudgetExceeded):
+            reserve_output_tokens(
+                token_cap=5_000,
+                tokens_spent=4_000,
+                requested_output_tokens=900,
+                minimum_output_tokens=256,
+                prompt_parts=("x" * 800,),
+                overhead_tokens=100,
+            )
+        self.assertGreater(conservative_prompt_tokens("é"), 512)
 
 
 class ProposalTests(unittest.TestCase):
@@ -606,6 +708,10 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(result.usage["total_tokens"], 40)
         self.assertEqual(completions.call["model"], "qwen3.6:35b")
         self.assertEqual(completions.call["max_tokens"], 1200)
+        SoCLaaSClient(client=client, planning_model="qwen3.6:35b").plan(
+            {"iteration": 1, "llm_budget": {"planning_max_tokens": 700}}
+        )
+        self.assertEqual(completions.call["max_tokens"], 700)
 
     def test_soclaas_reflection_is_structured_and_uses_planning_model(self) -> None:
         reflection = {
@@ -642,6 +748,14 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(result.usage["total_tokens"], 40)
         self.assertEqual(completions.call["model"], "qwen3.6:35b")
         self.assertEqual(completions.call["max_tokens"], 900)
+        adapter.reflect(
+            {
+                "iteration": 1,
+                "outcome": {"status": "failed"},
+                "llm_budget": {"reflection_max_tokens": 500},
+            }
+        )
+        self.assertEqual(completions.call["max_tokens"], 500)
 
     def test_reflection_parser_rejects_invalid_decision(self) -> None:
         reflection = {
@@ -1011,6 +1125,8 @@ class ProposalTests(unittest.TestCase):
         }
         scaffold = {
             "target_files": ["candidate/model.py", "candidate/train.py"],
+            "expected_effect": "Improve validation ranking through field-pair gates.",
+            "local_preflight": {"status": "passed"},
             "command": [
                 "python",
                 "candidate/train.py",
@@ -1023,6 +1139,16 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(result.proposal.patch, "")
         self.assertEqual(result.usage["total_tokens"], 0)
         self.assertFalse(proposal_requires_shared_parameter_effect(result.proposal))
+
+    def test_scaffold_without_local_preflight_is_rejected(self) -> None:
+        plan = {"hypothesis": "h", "reasoning": "r", "risk": "risk"}
+        scaffold = {
+            "target_files": ["candidate/model.py"],
+            "expected_effect": "Improve validation.",
+            "command": ["python", "candidate/train.py"],
+        }
+        with self.assertRaisesRegex(ValueError, "passed local preflight"):
+            proposal_from_scaffold(plan, scaffold, iteration=1)
 
 
 class PatchManagerTests(unittest.TestCase):

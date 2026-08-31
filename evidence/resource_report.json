@@ -44,8 +44,8 @@
     "wall_clock_seconds": 3420.22194067
   },
   "other_resources": {
-    "manual_experiment_records": 12,
-    "manual_training_runtime_seconds": 2277.8891156199998,
+    "manual_experiment_records": 14,
+    "manual_training_runtime_seconds": 2456.5132827039997,
     "manual_interventions": 4,
     "manual_experiment_llm_tokens": 0,
     "gpu_hours": 0.0

@@ -12,18 +12,18 @@
 
 - SoCLaaS planning model: qwen3.6:35b
 - SoCLaaS coding model: qwen3-coder-next
-- Runs / iterations: 36 / 48
-- Proposal attempts / failed attempts: 57 / 50
+- Runs / iterations: 37 / 49
+- Proposal attempts / failed attempts: 59 / 52
 - Accepted autonomous iterations: 0
-- LLM calls: 107
-- Prompt / response / total tokens: 738746 / 224766 / 963512
-- Autonomous wall-clock seconds: 3309.575
+- LLM calls: 111
+- Prompt / response / total tokens: 786578 / 242574 / 1029152
+- Autonomous wall-clock seconds: 3420.222
 
 ## Other resources and safety
 
-- Logged manual experiment records: 12
+- Logged manual experiment records: 14
 - Logged manual interventions: 4
-- Manual training runtime seconds: 2277.889
+- Manual training runtime seconds: 2456.513
 - GPU hours: 0.000
 - Development labels used: train and validation only
 - Hidden-test evaluation performed: no

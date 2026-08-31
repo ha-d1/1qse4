@@ -160,7 +160,14 @@ class SoCLaaSClient:
                         {"role": "user", "content": planning_prompt(context)},
                     ],
                     temperature=self.temperature,
-                    max_tokens=self.planning_max_tokens,
+                    max_tokens=min(
+                        self.planning_max_tokens,
+                        int(
+                            context.get("llm_budget", {}).get(
+                                "planning_max_tokens", self.planning_max_tokens
+                            )
+                        ),
+                    ),
                     response_format={"type": "json_object"},
                 )
                 raw_text = response.choices[0].message.content
@@ -198,7 +205,14 @@ class SoCLaaSClient:
                         {"role": "user", "content": reflection_prompt(context)},
                     ],
                     temperature=self.temperature,
-                    max_tokens=self.reflection_max_tokens,
+                    max_tokens=min(
+                        self.reflection_max_tokens,
+                        int(
+                            context.get("llm_budget", {}).get(
+                                "reflection_max_tokens", self.reflection_max_tokens
+                            )
+                        ),
+                    ),
                     response_format={"type": "json_object"},
                 )
                 raw_text = response.choices[0].message.content

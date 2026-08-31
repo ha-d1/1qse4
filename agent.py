@@ -11,12 +11,21 @@ from convergence import ConvergenceState
 from experiment_runner import ExperimentRunner
 from experiment_schema import ExperimentProposal
 from llm_common import ProposalResult, redact_secrets
+from llm_common import (
+    PLANNER_SYSTEM_INSTRUCTION,
+    REFLECTION_SYSTEM_INSTRUCTION,
+    SYSTEM_INSTRUCTION,
+    planning_prompt,
+    proposal_prompt,
+    reflection_prompt,
+)
 from llm_factory import create_llm_client
 from patch_manager import PatchManager
 from proposal_materializer import materialize_patch
 from research_planner import build_research_context
 from resource_tracker import ResourceTracker
 from run_logger import RunLogger
+from token_budget import reserve_output_tokens
 
 
 def load_config(path: Path) -> dict:
@@ -177,14 +186,14 @@ def proposal_from_scaffold(plan: dict, scaffold: dict, iteration: int) -> Propos
     scheduled_seed = seed_schedule[(iteration - 1) % len(seed_schedule)]
     if "--seed" in command:
         command[command.index("--seed") + 1] = str(scheduled_seed)
+    preflight = scaffold.get("local_preflight", {})
+    if preflight.get("status") != "passed":
+        raise ValueError("Experiment scaffold must record a passed local preflight")
     proposal = ExperimentProposal(
         hypothesis=plan["hypothesis"],
         reasoning=plan["reasoning"],
         target_files=list(scaffold["target_files"]),
-        expected_effect=(
-            "Test whether learned field-pair interaction gates improve validation GAUC and "
-            "nDCG@5 over the current multi-negative BPR interaction structure."
-        ),
+        expected_effect=scaffold["expected_effect"],
         risk=plan["risk"],
         patch="",
         command=command,
@@ -196,6 +205,26 @@ def proposal_from_scaffold(plan: dict, scaffold: dict, iteration: int) -> Propos
         usage={"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0},
         interaction_id=None,
         raw_text="prevalidated scaffold selected by planner",
+    )
+
+
+def llm_call_reservation(
+    *,
+    budget: dict,
+    tokens_spent: int,
+    system_instruction: str,
+    user_prompt: str,
+    requested_output_tokens: int,
+    minimum_output_tokens: int,
+) -> dict[str, int]:
+    """Reserve a complete provider call against the current iteration token cap."""
+    return reserve_output_tokens(
+        token_cap=int(budget.get("max_llm_tokens_per_iteration", 0)),
+        tokens_spent=tokens_spent,
+        requested_output_tokens=requested_output_tokens,
+        minimum_output_tokens=minimum_output_tokens,
+        prompt_parts=(system_instruction, user_prompt),
+        overhead_tokens=int(budget.get("llm_prompt_overhead_tokens", 512)),
     )
 
 
@@ -354,6 +383,25 @@ def main() -> None:
                     if key not in {"candidate_sources", "read_only_reference_sources"}
                 }
                 try:
+                    requested_planning_tokens = int(
+                        config["llm"].get("planning_max_tokens", 1200)
+                    )
+                    planning_context["llm_budget"] = {
+                        "planning_max_tokens": requested_planning_tokens
+                    }
+                    planning_reservation = llm_call_reservation(
+                        budget=budget,
+                        tokens_spent=(
+                            resources.snapshot()["total_tokens"] - iteration_llm_start
+                        ),
+                        system_instruction=PLANNER_SYSTEM_INSTRUCTION,
+                        user_prompt=planning_prompt(planning_context),
+                        requested_output_tokens=requested_planning_tokens,
+                        minimum_output_tokens=256,
+                    )
+                    planning_context["llm_budget"] = {
+                        "planning_max_tokens": planning_reservation["output_reservation"]
+                    }
                     planning_result = llm.plan(planning_context)
                     resources.add_llm_usage(**planning_result.usage)
                     if planning_result.plan["direction"] not in context["available_directions"]:
@@ -383,6 +431,7 @@ def main() -> None:
                     iteration_record["planning"] = {
                         "plan": planning_result.plan,
                         "llm_usage": planning_result.usage,
+                        "llm_reservation": planning_reservation,
                         "interaction_id": planning_result.interaction_id,
                     }
                     logger.write_json(
@@ -415,39 +464,38 @@ def main() -> None:
                 attempt_number = attempt_index + 1
                 attempt_record = {"attempt": attempt_number, "kind": "proposal" if not recovery else "repair"}
                 patch_applied = False
-                if attempt_index > 0:
-                    spent = resources.snapshot()["total_tokens"] - iteration_llm_start
-                    token_cap = int(budget.get("max_llm_tokens_per_iteration", 0))
-                    repair_reserve = int(budget.get("repair_token_reserve", 0))
-                    if token_cap and spent + repair_reserve > token_cap:
-                        iteration_record["recovery_events"].append(
-                            {
-                                "after_attempt": attempt_number - 1,
-                                "status": "skipped",
-                                "reason": "per-iteration LLM token cap reached",
-                                "tokens_spent": spent,
-                                "token_cap": token_cap,
-                                "repair_reserve": repair_reserve,
-                            }
-                        )
-                        iteration_record.update(
-                            {
-                                "status": "failed",
-                                "accepted": False,
-                                "error": "Repair skipped after reaching per-iteration LLM token cap",
-                            }
-                        )
-                        break
                 try:
-                    proposal_result = (
-                        proposal_from_scaffold(approved_plan, scaffold, iteration)
-                        if recovery is None and scaffold
-                        else (
+                    if recovery is None and scaffold:
+                        proposal_result = proposal_from_scaffold(
+                            approved_plan, scaffold, iteration
+                        )
+                    else:
+                        requested_coding_tokens = int(
+                            context.get("llm_budget", {}).get(
+                                "coding_max_tokens",
+                                config["llm"].get("coding_max_tokens", 7000),
+                            )
+                        )
+                        coding_reservation = llm_call_reservation(
+                            budget=budget,
+                            tokens_spent=(
+                                resources.snapshot()["total_tokens"]
+                                - iteration_llm_start
+                            ),
+                            system_instruction=SYSTEM_INSTRUCTION,
+                            user_prompt=proposal_prompt(context, recovery),
+                            requested_output_tokens=requested_coding_tokens,
+                            minimum_output_tokens=1024,
+                        )
+                        context["llm_budget"]["coding_max_tokens"] = (
+                            coding_reservation["output_reservation"]
+                        )
+                        attempt_record["llm_reservation"] = coding_reservation
+                        proposal_result = (
                             llm.propose(context)
                             if recovery is None
                             else llm.repair(context, recovery)
                         )
-                    )
                     if proposal_result.usage.get("total_tokens", 0):
                         resources.add_llm_usage(**proposal_result.usage)
                     proposal = proposal_result.proposal
@@ -609,12 +657,34 @@ def main() -> None:
                     improvement=improvement,
                 )
                 try:
+                    requested_reflection_tokens = int(
+                        config["llm"].get("reflection_max_tokens", 900)
+                    )
+                    reflection_context["llm_budget"] = {
+                        "reflection_max_tokens": requested_reflection_tokens
+                    }
+                    reflection_reservation = llm_call_reservation(
+                        budget=budget,
+                        tokens_spent=(
+                            resources.snapshot()["total_tokens"] - iteration_llm_start
+                        ),
+                        system_instruction=REFLECTION_SYSTEM_INSTRUCTION,
+                        user_prompt=reflection_prompt(reflection_context),
+                        requested_output_tokens=requested_reflection_tokens,
+                        minimum_output_tokens=256,
+                    )
+                    reflection_context["llm_budget"] = {
+                        "reflection_max_tokens": reflection_reservation[
+                            "output_reservation"
+                        ]
+                    }
                     reflection_result = llm.reflect(reflection_context)
                     resources.add_llm_usage(**reflection_result.usage)
                     iteration_record["reflection"] = {
                         "status": "success",
                         "content": reflection_result.reflection,
                         "llm_usage": reflection_result.usage,
+                        "llm_reservation": reflection_reservation,
                         "interaction_id": reflection_result.interaction_id,
                     }
                     logger.write_json(

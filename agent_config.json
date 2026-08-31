@@ -36,7 +36,7 @@
     "experiment_timeout_seconds": 1200,
     "max_repair_attempts": 1,
     "max_llm_tokens_per_iteration": 52000,
-    "repair_token_reserve": 14000
+    "llm_prompt_overhead_tokens": 512
   },
   "safety": {
     "development_splits": ["train", "valid"],

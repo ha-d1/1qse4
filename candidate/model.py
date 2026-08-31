@@ -7,10 +7,11 @@ import time
 import numpy as np
 
 from baseline import FM, make_bpr_pairs
-from data import (
+from candidate.data import (
     FIELDS,
     HOUR_FIELDS,
     SESSION_FIELDS,
+    TEMPORAL_CROSS_FIELDS,
     USER_AUTHOR_FIELDS,
     WEEKDAY_FIELDS,
     encode,
@@ -315,6 +316,7 @@ def train_candidate(
         "weekday": WEEKDAY_FIELDS,
         "hour": HOUR_FIELDS,
         "session": SESSION_FIELDS,
+        "temporal_cross": TEMPORAL_CROSS_FIELDS,
         "user_author": USER_AUTHOR_FIELDS,
         "history_blend": FIELDS,
     }
