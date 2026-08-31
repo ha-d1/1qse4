@@ -4,7 +4,10 @@
     "label": "long_view",
     "metrics": ["GAUC", "nDCG@5"],
     "primary": "mean(GAUC, nDCG@5)",
-    "official_valid_primary": 0.6016
+    "official_valid_primary": 0.6016,
+    "incumbent_valid_primary_seed_0": 0.6038926243782043,
+    "incumbent_valid_primary": 0.603919267654419,
+    "incumbent_three_seed_mean": 0.6038278142611185
   },
   "paths": {
     "data_dir": "./KuaiRand-Pure/data",
@@ -12,8 +15,9 @@
     "candidate_dir": "./candidate"
   },
   "llm": {
-    "provider": "gemini",
-    "model": "gemini-2.5-flash",
+    "provider": "soclaas",
+    "model": "qwen3-coder-next",
+    "planning_model": "qwen3.6:35b",
     "temperature": 0.2,
     "max_attempts": 3
   },
@@ -23,7 +27,7 @@
     "max_iterations": 50,
     "max_wall_clock_seconds": 21600,
     "experiment_timeout_seconds": 1200,
-    "max_repair_attempts": 2
+    "max_repair_attempts": 1
   },
   "safety": {
     "development_splits": ["train", "valid"],

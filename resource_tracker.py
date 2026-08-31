@@ -22,10 +22,14 @@ class ResourceTracker:
         self.started_at = time.monotonic()
         self.usage = ResourceUsage()
 
-    def add_llm_usage(self, prompt: int, response: int, total: int | None = None) -> None:
-        self.usage.prompt_tokens += int(prompt)
-        self.usage.response_tokens += int(response)
-        self.usage.total_tokens += int(total if total is not None else prompt + response)
+    def add_llm_usage(
+        self, prompt_tokens: int, response_tokens: int, total_tokens: int | None = None
+    ) -> None:
+        self.usage.prompt_tokens += int(prompt_tokens)
+        self.usage.response_tokens += int(response_tokens)
+        self.usage.total_tokens += int(
+            total_tokens if total_tokens is not None else prompt_tokens + response_tokens
+        )
         self.usage.llm_calls += 1
 
     def snapshot(self) -> dict:

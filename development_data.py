@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Sequence, Tuple
 
-from data import load
+from data import AUXILIARY_FIELDS, load_selected, load_train_auxiliary, load_unlabelled
 
 Row = Tuple[int, str, str, str, str, float, int]
 UnlabelledRow = Tuple[int, str, str, str, str, float]
@@ -28,11 +28,23 @@ def ensure_development_splits(splits: Dict[str, Sequence[Row]]) -> None:
 
 
 def load_development_splits(data_dir: str) -> Dict[str, List[Row]]:
-    """Return labelled train/valid data and deliberately discard test labels."""
-    all_splits = load(data_dir)
-    development = {name: all_splits[name] for name in sorted(DEVELOPMENT_SPLITS)}
+    """Read and return labels for train/valid only; test rows are never loaded."""
+    development = load_selected(data_dir, sorted(DEVELOPMENT_SPLITS))
     ensure_development_splits(development)
     return development
+
+
+def load_training_auxiliary(data_dir: str, fields=AUXILIARY_FIELDS):
+    """Expose auxiliary supervision for train only; validation/test targets are unavailable."""
+    auxiliary = load_train_auxiliary(data_dir, fields=fields)
+    train_rows = load_selected(data_dir, ["train"])["train"]
+    lengths = {field: len(values) for field, values in auxiliary.items()}
+    if any(length != len(train_rows) for length in lengths.values()):
+        raise ValueError(
+            "Auxiliary targets are not aligned with the training split: "
+            f"train={len(train_rows)}, auxiliary={lengths}"
+        )
+    return auxiliary
 
 
 def remove_labels(rows: Iterable[Row]) -> List[UnlabelledRow]:
@@ -42,4 +54,4 @@ def remove_labels(rows: Iterable[Row]) -> List[UnlabelledRow]:
 
 def load_final_prediction_rows(data_dir: str) -> List[UnlabelledRow]:
     """Return test features without labels for one final prediction pass."""
-    return remove_labels(load(data_dir)["test"])
+    return load_unlabelled(data_dir, "test")

@@ -1,4 +1,4 @@
-"""Validate, apply, and reverse Gemini-generated patches."""
+"""Validate, apply, and reverse research-agent-generated patches."""
 from __future__ import annotations
 
 import re

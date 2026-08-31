@@ -2,7 +2,9 @@
 
 ## Dependencies
 
-Python 3.9+ and numpy. **Nothing else.** torch, pandas, and sklearn are not required.
+The starter baselines need Python 3.9+ and NumPy. The autonomous agent additionally
+uses the OpenAI-compatible client listed in `requirements.txt`. torch, pandas, and
+sklearn are not required.
 
 ## Data
 
@@ -27,7 +29,7 @@ FM takes about 40 seconds in total (single-threaded CPU).
 
 ## Autonomous Research Agent
 
-The agent foundation uses the official Google Gen AI SDK directly; LangChain is not required. Development code is deliberately limited to labelled `train` and `valid` data. Test rows are exposed without labels only for the final prediction stage.
+The agent uses the OpenAI-compatible NUS SoCLaaS API with Qwen as its planning and coding models; LangChain is not required. Development code is deliberately limited to labelled `train` and `valid` data. Test rows are exposed without labels only for the final prediction stage.
 
 Install and verify the protected baseline:
 
@@ -37,14 +39,14 @@ python3 -m unittest discover -s tests -v
 python3 verify_baseline.py
 ```
 
-Set the API key without writing it into source code, then start with one bounded iteration:
+Store the API key in macOS Keychain using the prompt-based instructions in
+`SOCLAAS_SETUP.md`, then start with one bounded iteration:
 
 ```bash
-export GEMINI_API_KEY="YOUR_KEY"
-python3 agent.py --max-iterations 1
+.venv/bin/python run_agent_with_keychain.py --max-iterations 1
 ```
 
-The full run is bounded by `agent_config.json`: at most 50 iterations, six hours, and convergence after three consecutive iterations without an improvement greater than 0.002. Gemini may propose unified-diff changes only under `candidate/`; rejected or failed changes are rolled back. Each iteration records its hypothesis, patch, validation metrics, process output, errors, token usage, and wall-clock usage under `runs/`.
+The full run is bounded by `agent_config.json`: at most 50 iterations, six hours, and convergence after three consecutive iterations without an improvement greater than 0.002. The SoCLaaS-hosted Qwen agent may propose changes only under `candidate/`; rejected or failed changes are rolled back. Each iteration records its hypothesis, patch, validation metrics, process output, errors, token usage, and wall-clock usage under `runs/`.
 
 ## Task Definition (the conventions are fixed; do not change them)
 

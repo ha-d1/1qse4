@@ -14,19 +14,29 @@ class ExperimentProposal:
     risk: str
     patch: str
     command: List[str]
+    file_updates: List[Dict[str, str]] = field(default_factory=list)
 
     def validate(self) -> None:
         if not self.hypothesis.strip() or not self.reasoning.strip():
             raise ValueError("Proposal requires a hypothesis and reasoning")
         if not self.target_files:
             raise ValueError("Proposal must name at least one target file")
-        if not self.patch.strip():
-            raise ValueError("Proposal must include a unified diff patch")
+        if not self.patch.strip() and not self.file_updates:
+            raise ValueError("Proposal must include file_updates or a unified diff patch")
         if not self.command:
             raise ValueError("Proposal must provide an argv-style command")
+        if len(self.command) < 2 or self.command[1] != "candidate/train.py":
+            raise ValueError("Proposal command must run candidate/train.py")
+        if any("test" in str(argument).lower() for argument in self.command[2:]):
+            raise ValueError("Proposal command may not reference the hidden test split")
         for path in self.target_files:
             if not path.startswith("candidate/") or ".." in path.split("/"):
                 raise ValueError(f"Target is outside candidate/: {path}")
+        for update in self.file_updates:
+            if set(update) != {"path", "content"}:
+                raise ValueError("Each file update requires exactly path and content")
+            if update["path"] not in self.target_files:
+                raise ValueError(f"File update is not a declared target: {update['path']}")
 
 
 @dataclass

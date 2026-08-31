@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -32,3 +33,10 @@ class RunLogger:
 
     def log_iteration(self, iteration: int, payload: Mapping[str, Any]) -> Path:
         return self.write_json(f"iterations/iteration_{iteration:03d}/result.json", payload)
+
+    def snapshot_candidate(self, source: str | Path, iteration: int) -> Path:
+        """Persist an immutable copy of a best candidate for reproducibility."""
+        destination = self.run_dir / "best_candidates" / f"iteration_{iteration:03d}"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(Path(source), destination)
+        return destination

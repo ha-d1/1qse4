@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
+
+SECRET_ENV_NAMES = frozenset(
+    {"SOCLAAS_API_KEY", "OPENAI_API_KEY"}
+)
 
 
 @dataclass
@@ -29,13 +34,19 @@ class ExperimentRunner:
         executable = Path(command[0]).name
         if executable not in {"python", "python3"} and not executable.startswith("python3."):
             raise ValueError(f"Only Python experiment commands are allowed; got {command[0]!r}")
-        merged_env = os.environ.copy()
+        argv = list(command)
+        argv[0] = sys.executable
+        merged_env = {
+            name: value for name, value in os.environ.items() if name not in SECRET_ENV_NAMES
+        }
         if env:
-            merged_env.update(env)
+            merged_env.update(
+                {name: value for name, value in env.items() if name not in SECRET_ENV_NAMES}
+            )
         started = time.monotonic()
         try:
             completed = subprocess.run(
-                list(command),
+                argv,
                 cwd=self.project_root,
                 env=merged_env,
                 capture_output=True,

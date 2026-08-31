@@ -1,0 +1,135 @@
+"""OpenAI-compatible client for the NUS School of Computing LLM service."""
+from __future__ import annotations
+
+import os
+import time
+from typing import Any, Dict
+
+from llm_common import (
+    PLAN_SCHEMA,
+    PLANNER_SYSTEM_INSTRUCTION,
+    PlanningResult,
+    ProposalResult,
+    SYSTEM_INSTRUCTION,
+    parse_plan,
+    parse_proposal,
+    planning_prompt,
+    proposal_prompt,
+)
+
+DEFAULT_BASE_URL = "https://soclaas-api.comp.nus.edu.sg/v1"
+
+
+class SoCLaaSClient:
+    def __init__(
+        self,
+        model: str = "qwen3-coder-next",
+        max_attempts: int = 3,
+        temperature: float = 0.2,
+        planning_model: str = "qwen3.6:35b",
+        client: Any | None = None,
+    ) -> None:
+        self.model = os.environ.get("SOCLAAS_MODEL", model)
+        self.max_attempts = max_attempts
+        self.temperature = temperature
+        self.planning_model = os.environ.get("SOCLAAS_PLANNING_MODEL", planning_model)
+        if client is None:
+            api_key = os.environ.get("SOCLAAS_API_KEY")
+            if not api_key:
+                raise RuntimeError("Set SOCLAAS_API_KEY before starting the autonomous agent")
+            try:
+                from openai import OpenAI
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Install dependencies with: python3 -m pip install -r requirements.txt"
+                ) from exc
+            base_url = os.environ.get("SOCLAAS_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
+            client = OpenAI(api_key=api_key, base_url=base_url)
+        self.client = client
+
+    @staticmethod
+    def _usage(response: Any) -> Dict[str, int]:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
+        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        response_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        total = int(getattr(usage, "total_tokens", prompt + response_tokens) or 0)
+        return {
+            "prompt_tokens": prompt,
+            "response_tokens": response_tokens,
+            "total_tokens": total,
+        }
+
+    def _request(self, context: Dict[str, Any], recovery: Dict[str, Any] | None) -> ProposalResult:
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_INSTRUCTION},
+                        {"role": "user", "content": proposal_prompt(context, recovery)},
+                    ],
+                    temperature=self.temperature,
+                    response_format={"type": "json_object"},
+                )
+                raw_text = response.choices[0].message.content
+                if not raw_text:
+                    raise ValueError("SoCLaaS returned an empty proposal")
+                return ProposalResult(
+                    proposal=parse_proposal(raw_text),
+                    usage=self._usage(response),
+                    interaction_id=getattr(response, "id", None),
+                    raw_text=raw_text,
+                )
+            except Exception as exc:
+                last_error = exc
+                if attempt < self.max_attempts:
+                    time.sleep(min(2 ** (attempt - 1), 4))
+        raise RuntimeError(
+            f"SoCLaaS proposal failed after {self.max_attempts} attempts: "
+            f"{type(last_error).__name__}: {last_error}"
+        ) from last_error
+
+    def propose(self, context: Dict[str, Any]) -> ProposalResult:
+        return self._request(context, recovery=None)
+
+    def plan(self, context: Dict[str, Any]) -> PlanningResult:
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.planning_model,
+                    messages=[
+                        {"role": "system", "content": PLANNER_SYSTEM_INSTRUCTION},
+                        {"role": "user", "content": planning_prompt(context)},
+                    ],
+                    temperature=self.temperature,
+                    response_format={"type": "json_object"},
+                )
+                raw_text = response.choices[0].message.content
+                if not raw_text:
+                    raise ValueError("SoCLaaS returned an empty research plan")
+                return PlanningResult(
+                    plan=parse_plan(raw_text),
+                    usage=self._usage(response),
+                    interaction_id=getattr(response, "id", None),
+                    raw_text=raw_text,
+                )
+            except Exception as exc:
+                last_error = exc
+                if attempt < self.max_attempts:
+                    time.sleep(min(2 ** (attempt - 1), 4))
+        raise RuntimeError(
+            f"SoCLaaS planning failed after {self.max_attempts} attempts: "
+            f"{type(last_error).__name__}: {last_error}"
+        ) from last_error
+
+    def repair(self, context: Dict[str, Any], recovery: Dict[str, Any]) -> ProposalResult:
+        return self._request(context, recovery=recovery)
+
+    def close(self) -> None:
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            close()

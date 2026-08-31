@@ -1,2 +1,2 @@
 numpy>=1.23
-google-genai>=1.47,<2
+openai>=1.40,<2
