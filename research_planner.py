@@ -261,6 +261,23 @@ def build_research_context(
                     "hour bucket; future temporal work must use session order or a new mechanism."
                 ),
             },
+            {
+                "direction": "time_ms session gap and position interactions",
+                "decision": "accepted as a diverse single-checkpoint ensemble component",
+                "evidence": {
+                    "seed_0_primary": 0.6045177578926086,
+                    "seed_1_primary": 0.6042183637619019,
+                    "seed_2_primary": 0.6046835780143738,
+                    "three_seed_mean": 0.6044732332229614,
+                    "selected_session_seed": 2,
+                    "nine_checkpoint_ensemble_primary": 0.6051324605941772,
+                    "all_three_session_ensemble_primary": 0.6049855947494507,
+                },
+                "instruction": (
+                    "Retain session seed 2 only. Do not repeat the same fixed session gap or "
+                    "position buckets; additional session seeds diluted the incumbent."
+                ),
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",

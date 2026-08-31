@@ -70,5 +70,14 @@
     "objective": "four-negative BPR FM",
     "learning_rate": 0.00025,
     "feature_set": "hour"
+  },
+  {
+    "file": "checkpoints/session_seed2.npz",
+    "present": true,
+    "bytes": 2516579,
+    "sha256": "9044454a200fc48065dceba8ef6c4af82a144de6a101c024f9b0983886c289c4",
+    "objective": "four-negative BPR FM",
+    "learning_rate": 0.00025,
+    "feature_set": "session"
   }
 ]

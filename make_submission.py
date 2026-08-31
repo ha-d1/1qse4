@@ -14,6 +14,7 @@ from candidate.model import FieldWeightedFM
 from data import (
     FIELDS,
     HOUR_FIELDS,
+    SESSION_FIELDS,
     USER_AUTHOR_FIELDS,
     WEEKDAY_FIELDS,
     fit_feature_encoder,
@@ -27,6 +28,7 @@ FEATURE_SETS = {
     "base": FIELDS,
     "weekday": WEEKDAY_FIELDS,
     "hour": HOUR_FIELDS,
+    "session": SESSION_FIELDS,
     "user_author": USER_AUTHOR_FIELDS,
 }
 

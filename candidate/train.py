@@ -63,7 +63,7 @@ def main() -> None:
     parser.add_argument("--checkpoint-out")
     parser.add_argument(
         "--feature-set",
-        choices=["base", "weekday", "hour", "user_author", "history_blend"],
+        choices=["base", "weekday", "hour", "session", "user_author", "history_blend"],
         default="base",
     )
     args = parser.parse_args()

@@ -21,7 +21,10 @@ FIELDS = ['user_id', 'video_id', 'author_id', 'tab', 'dur_bucket']
 WEEKDAY_FIELDS = FIELDS + ['weekday']
 USER_AUTHOR_FIELDS = FIELDS + ['user_author']
 HOUR_FIELDS = FIELDS + ['hour_bucket']
-SUPPORTED_FIELDS = frozenset(WEEKDAY_FIELDS + USER_AUTHOR_FIELDS + HOUR_FIELDS)
+SESSION_FIELDS = HOUR_FIELDS + ['session_gap_bucket', 'session_position_bucket']
+SUPPORTED_FIELDS = frozenset(
+    WEEKDAY_FIELDS + USER_AUTHOR_FIELDS + HOUR_FIELDS + SESSION_FIELDS
+)
 
 def _load_selected(data_dir, split_names, include_labels=True):
     """Read only requested date ranges, optionally without materialising labels."""
@@ -115,7 +118,58 @@ def _validated_fields(fields=None):
     return fields
 
 
-def _raw_features(row, fields, edges, include_labels=True):
+def _session_context(rows, include_labels):
+    """Derive label-free within-user session state from event timestamps."""
+    context_offset = 7 if include_labels else 6
+    timestamp_offset = context_offset + 1
+    last_timestamp = {}
+    session_position = {}
+    output = []
+    for row in rows:
+        if len(row) <= timestamp_offset:
+            raise ValueError("session features require rows loaded with time_ms context")
+        user = row[1]
+        timestamp = int(row[timestamp_offset])
+        previous = last_timestamp.get(user)
+        gap_ms = None if previous is None else timestamp - previous
+        new_session = gap_ms is None or gap_ms < 0 or gap_ms > 30 * 60 * 1000
+        position = 0 if new_session else session_position[user] + 1
+        if gap_ms is None:
+            gap_bucket = "first"
+        elif gap_ms < 0 or gap_ms > 30 * 60 * 1000:
+            gap_bucket = "reset"
+        elif gap_ms <= 10 * 1000:
+            gap_bucket = "0-10s"
+        elif gap_ms <= 60 * 1000:
+            gap_bucket = "10-60s"
+        elif gap_ms <= 5 * 60 * 1000:
+            gap_bucket = "1-5m"
+        else:
+            gap_bucket = "5-30m"
+        if position == 0:
+            position_bucket = "0"
+        elif position <= 2:
+            position_bucket = "1-2"
+        elif position <= 5:
+            position_bucket = "3-5"
+        elif position <= 10:
+            position_bucket = "6-10"
+        elif position <= 20:
+            position_bucket = "11-20"
+        else:
+            position_bucket = "21+"
+        output.append(
+            {
+                "session_gap_bucket": gap_bucket,
+                "session_position_bucket": position_bucket,
+            }
+        )
+        last_timestamp[user] = timestamp
+        session_position[user] = position
+    return output
+
+
+def _raw_features(row, fields, edges, include_labels=True, session_context=None):
     context_offset = 7 if include_labels else 6
     hourmin = row[context_offset] if len(row) > context_offset else None
     values = {
@@ -131,6 +185,10 @@ def _raw_features(row, fields, edges, include_labels=True):
         if hourmin is None:
             raise ValueError("hour_bucket requires rows loaded with hourmin context")
         values['hour_bucket'] = str(int(hourmin) // 100)
+    if 'session_gap_bucket' in fields or 'session_position_bucket' in fields:
+        if session_context is None:
+            raise ValueError("session fields require derived timestamp context")
+        values.update(session_context)
     return [values[field] for field in fields]
 
 
@@ -141,8 +199,17 @@ def fit_feature_encoder(train_rows, fields=None):
         raise ValueError("Cannot fit feature encoder without training rows")
     edges = _bucket_edges([row[5] for row in train_rows])
     vocabs = [dict() for _ in fields]
-    for row in train_rows:
-        for i, v in enumerate(_raw_features(row, fields, edges, include_labels=True)):
+    contexts = (
+        _session_context(train_rows, include_labels=True)
+        if any(field.startswith('session_') for field in fields)
+        else [None] * len(train_rows)
+    )
+    for row, context in zip(train_rows, contexts):
+        for i, v in enumerate(
+            _raw_features(
+                row, fields, edges, include_labels=True, session_context=context
+            )
+        ):
             if v not in vocabs[i]:
                 vocabs[i][v] = len(vocabs[i])
     unk = [len(v) for v in vocabs]
@@ -165,9 +232,20 @@ def transform_rows(rows, encoder, include_labels=True):
     X = np.empty((len(rows), len(fields)), dtype=np.int32)
     y = np.empty(len(rows), dtype=np.float32) if include_labels else None
     users = []
-    for n, row in enumerate(rows):
+    contexts = (
+        _session_context(rows, include_labels=include_labels)
+        if any(field.startswith('session_') for field in fields)
+        else [None] * len(rows)
+    )
+    for n, (row, context) in enumerate(zip(rows, contexts)):
         for i, value in enumerate(
-            _raw_features(row, fields, encoder['edges'], include_labels=include_labels)
+            _raw_features(
+                row,
+                fields,
+                encoder['edges'],
+                include_labels=include_labels,
+                session_context=context,
+            )
         ):
             X[n, i] = (
                 encoder['vocabs'][i].get(value, encoder['unk'][i])

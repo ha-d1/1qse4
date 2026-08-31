@@ -67,6 +67,7 @@ def collect_report(runs_dir: Path, config: dict) -> dict:
         runs_dir / "hour_feature_seed0" / "best.npz",
         runs_dir / "hour_feature_seed1" / "best.npz",
         runs_dir / "hour_feature_seed2" / "best.npz",
+        runs_dir / "session_feature_seed2" / "best.npz",
     ]
     return {
         "benchmark": {
@@ -131,7 +132,7 @@ def render_markdown(report: dict) -> str:
 - Validation primary: {candidate['validation_primary']:.9f}
 - Best single-seed validation primary: {candidate['best_single_seed_validation_primary']:.9f}
 - Matched three-seed validation mean: {candidate['three_seed_validation_mean']:.9f}
-- All eight checkpoints present: {candidate['checkpoints_present']}
+- All nine checkpoints present: {candidate['checkpoints_present']}
 
 ## Autonomous agent usage
 

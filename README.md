@@ -80,7 +80,7 @@ treated as evidence against the scientific hypothesis.
 
 The compact, Git-tracked audit trail is under `evidence/`. It contains aggregate token/runtime
 usage, every compact experiment outcome, the latest sustained three-iteration run, automatic
-reflections, checkpoint hashes, and the eight accepted checkpoints. Refresh and verify it with:
+reflections, checkpoint hashes, and the nine accepted checkpoints. Refresh and verify it with:
 
 ```bash
 .venv/bin/python build_evidence_package.py
@@ -101,6 +101,8 @@ protocol. Hidden-test labels were not evaluated during development.
 | User-balanced BPR | 1 | **0.602274** | Rejected after one seed and ensemble check |
 | Hour-aware BPR | 0, 1, 2 | 0.604570 / 0.604692 / 0.604592; mean **0.604618** | Accepted |
 | Five base + three hour-aware rank ensemble | 0–4 + 0–2 | **0.604913** | **Current incumbent** |
+| Session-aware BPR | 0, 1, 2 | 0.604518 / 0.604218 / 0.604684; mean **0.604473** | Seed 2 retained for diversity |
+| Base + hour ensemble + session seed 2 | 9 checkpoints | **0.605132** | **Current incumbent** |
 
 The sustained autonomous run is `run_20260831T123431Z`: all three iterations completed training,
 preflight, validation, structured reflection, and artifact logging with zero manual interventions.
@@ -135,8 +137,8 @@ evidence builder copies a compact, checksum-verifiable package into `evidence/`.
 - The field-weighted experiment is a robust negative result, not a new best model.
 - The current implementation is CPU/NumPy-oriented and does not yet exploit long user-history
   sequences or GPU acceleration.
-- The next high-value direction is a prevalidated session/history representation that uses
-  `time_ms`, evaluated with matched seeds before any architecture is accepted.
+- The next high-value direction is a learned recent-interest representation or a controlled
+  watch-duration objective; simple session gap/position fields are now fully evaluated.
 
 ## Task Definition (the conventions are fixed; do not change them)
 

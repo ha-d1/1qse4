@@ -7,7 +7,14 @@ import time
 import numpy as np
 
 from baseline import FM, make_bpr_pairs
-from data import FIELDS, HOUR_FIELDS, USER_AUTHOR_FIELDS, WEEKDAY_FIELDS, encode
+from data import (
+    FIELDS,
+    HOUR_FIELDS,
+    SESSION_FIELDS,
+    USER_AUTHOR_FIELDS,
+    WEEKDAY_FIELDS,
+    encode,
+)
 from evaluate import evaluate
 
 
@@ -307,6 +314,7 @@ def train_candidate(
         "base": FIELDS,
         "weekday": WEEKDAY_FIELDS,
         "hour": HOUR_FIELDS,
+        "session": SESSION_FIELDS,
         "user_author": USER_AUTHOR_FIELDS,
         "history_blend": FIELDS,
     }

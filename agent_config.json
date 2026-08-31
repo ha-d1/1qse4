@@ -6,10 +6,10 @@
     "primary": "mean(GAUC, nDCG@5)",
     "official_valid_primary": 0.6016,
     "incumbent_valid_primary_seed_0": 0.6038926243782043,
-    "incumbent_valid_primary": 0.6049131155014038,
+    "incumbent_valid_primary": 0.6051324605941772,
     "incumbent_single_seed_primary": 0.6046919822692871,
     "incumbent_three_seed_mean": 0.6046182711919149,
-    "incumbent_model": "eight-checkpoint rank ensemble of five base and three hour-aware four-negative BPR FMs"
+    "incumbent_model": "nine-checkpoint rank ensemble of five base, three hour-aware, and one session-aware four-negative BPR FMs"
   },
   "paths": {
     "data_dir": "./KuaiRand-Pure/data",

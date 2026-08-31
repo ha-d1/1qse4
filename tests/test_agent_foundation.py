@@ -37,6 +37,7 @@ from build_evidence_package import compact_iteration, latest_sustained_run
 from data import (
     FIELDS,
     HOUR_FIELDS,
+    SESSION_FIELDS,
     USER_AUTHOR_FIELDS,
     WEEKDAY_FIELDS,
     encode,
@@ -272,6 +273,24 @@ class DevelopmentDataTests(unittest.TestCase):
             remove_labels(labelled),
             [(20220429, "u", "v", "a", "tab", 1000.0, 945, 123456)],
         )
+
+    def test_session_features_are_label_independent_and_preserve_order(self) -> None:
+        train = [
+            (20220408, "u1", "v1", "a1", "t", 10.0, 1, 930, 1_000_000),
+            (20220408, "u1", "v2", "a2", "t", 20.0, 0, 930, 1_005_000),
+            (20220408, "u1", "v3", "a3", "t", 30.0, 1, 1030, 3_000_000),
+        ]
+        flipped = [row[:6] + (1 - row[6],) + row[7:] for row in train]
+        encoder = fit_feature_encoder(train, fields=SESSION_FIELDS)
+        original, labels, _ = transform_rows(train, encoder, include_labels=True)
+        changed, flipped_labels, _ = transform_rows(
+            flipped, encoder, include_labels=True
+        )
+        np.testing.assert_array_equal(original, changed)
+        np.testing.assert_array_equal(labels, [1.0, 0.0, 1.0])
+        np.testing.assert_array_equal(flipped_labels, [0.0, 1.0, 0.0])
+        self.assertNotEqual(int(original[0, -1]), int(original[1, -1]))
+        self.assertEqual(int(original[0, -1]), int(original[2, -1]))
 
     def test_checkpoint_persists_weights_and_metadata(self) -> None:
         model = SimpleNamespace(

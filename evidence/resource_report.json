@@ -10,9 +10,9 @@
     "official_validation_primary": 0.6016
   },
   "selected_candidate": {
-    "model": "eight-checkpoint rank ensemble of five base and three hour-aware four-negative BPR FMs",
+    "model": "nine-checkpoint rank ensemble of five base, three hour-aware, and one session-aware four-negative BPR FMs",
     "learning_rate": 0.00025,
-    "validation_primary": 0.6049131155014038,
+    "validation_primary": 0.6051324605941772,
     "best_single_seed_validation_primary": 0.6046919822692871,
     "three_seed_validation_mean": 0.6046182711919149,
     "checkpoints": [
@@ -23,7 +23,8 @@
       "evidence/checkpoints/seed4.npz",
       "evidence/checkpoints/hour_seed0.npz",
       "evidence/checkpoints/hour_seed1.npz",
-      "evidence/checkpoints/hour_seed2.npz"
+      "evidence/checkpoints/hour_seed2.npz",
+      "evidence/checkpoints/session_seed2.npz"
     ],
     "checkpoints_present": true
   },
@@ -43,8 +44,8 @@
     "wall_clock_seconds": 3309.575323003
   },
   "other_resources": {
-    "manual_experiment_records": 9,
-    "manual_training_runtime_seconds": 1787.278541538,
+    "manual_experiment_records": 12,
+    "manual_training_runtime_seconds": 2277.8891156199998,
     "manual_interventions": 4,
     "manual_experiment_llm_tokens": 0,
     "gpu_hours": 0.0

@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-08-31T13:47:36.118034+00:00",
+  "generated_at_utc": "2026-08-31T14:06:31.189010+00:00",
   "benchmark": "KuaiRand-Pure within-user ranking",
   "label": "long_view",
   "metrics": [
@@ -12,5 +12,5 @@
   "autonomous_iterations": 48,
   "reflections_present": 18,
   "sustained_run_present": true,
-  "checkpoint_count": 8
+  "checkpoint_count": 9
 }
