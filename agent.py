@@ -41,7 +41,10 @@ def reference_api_contracts() -> dict[str, str]:
             "FM(dim, k=16, lr=0.001, l2=1e-6, seed=0); public state V, W, b, lr, l2; "
             "methods logits(X)->(scores,E,S), step(X,y)->loss, "
             "step_bpr(X_pos,X_neg)->loss, predict(X,bs=200000)->scores. "
-            "make_bpr_pairs(X,y,users,seed=0)->(X_positive,X_negative)."
+            "make_bpr_pairs(X,y,users,seed=0)->(X_positive,X_negative). "
+            "X is an integer categorical-ID matrix shaped [rows, field_count], normally five "
+            "fields; dim is the global encoded vocabulary size, not X.shape[1]. FM gathers "
+            "V[X] and W[X]. Never compute X @ V or treat X as a dense one-hot matrix."
         ),
         "data.py": (
             "FIELDS, WEEKDAY_FIELDS, USER_AUTHOR_FIELDS; "
@@ -111,15 +114,62 @@ def load_prior_experiment_history(runs_dir: Path, limit: int = 6) -> list[dict]:
                 }
                 if preflight
                 else None,
+                "reflection": payload.get("reflection", {}).get("content"),
             }
         )
     records.reverse()
     return records
 
 
+def build_reflection_context(
+    iteration_record: dict,
+    approved_plan: dict | None,
+    prior_best: float,
+    current_best: dict,
+    improvement: float,
+) -> dict:
+    """Build a compact, code-free evidence record for post-experiment reflection."""
+    attempts = []
+    for attempt in iteration_record.get("attempts", []):
+        proposal = attempt.get("proposal") or {}
+        preflight = attempt.get("preflight") or {}
+        process = attempt.get("process") or {}
+        attempts.append(
+            {
+                "attempt": attempt.get("attempt"),
+                "kind": attempt.get("kind"),
+                "hypothesis": proposal.get("hypothesis"),
+                "status": attempt.get("status"),
+                "error": attempt.get("error"),
+                "preflight_status": preflight.get("status"),
+                "experiment_status": process.get("status"),
+                "metrics": attempt.get("metrics"),
+                "accepted": attempt.get("accepted", False),
+            }
+        )
+    return {
+        "iteration": iteration_record.get("iteration"),
+        "approved_plan": approved_plan,
+        "outcome": {
+            "status": iteration_record.get("status"),
+            "accepted": iteration_record.get("accepted", False),
+            "metrics": iteration_record.get("metrics"),
+            "error": iteration_record.get("error"),
+            "attempts": attempts,
+        },
+        "comparison": {
+            "prior_best_primary": prior_best,
+            "current_best_validation_metrics": current_best,
+            "improvement_over_prior_best": improvement,
+        },
+        "evidence_boundary": "train and validation only; hidden test was not evaluated",
+    }
+
+
 def command_with_verified_data_dir(command: list[str], data_dir: Path) -> list[str]:
     """Force generated commands to use the already verified development dataset path."""
     output = list(command)
+    output = ["--batch-size" if argument == "--batch_size" else argument for argument in output]
     for option in ("--data_dir", "--data-dir", "--dataset", "--label"):
         while option in output:
             index = output.index(option)
@@ -240,6 +290,7 @@ def main() -> None:
     try:
         while convergence.stop_reason(resources.snapshot()["wall_clock_seconds"]) is None:
             iteration = convergence.iterations + 1
+            prior_best_score = convergence.best_score
             elapsed = resources.snapshot()["wall_clock_seconds"]
             context = build_research_context(
                 iteration=iteration,
@@ -339,14 +390,18 @@ def main() -> None:
                     resources.add_llm_usage(**proposal_result.usage)
                     proposal = proposal_result.proposal
                     approved_plan = context.get("approved_research_plan")
-                    if approved_plan and set(proposal.target_files) != set(
-                        approved_plan["target_files"]
-                    ):
-                        raise ValueError(
-                            "Coder target_files must exactly match the approved plan: "
-                            f"approved={approved_plan['target_files']}, "
-                            f"returned={proposal.target_files}"
-                        )
+                    if approved_plan:
+                        approved_targets = set(approved_plan["target_files"])
+                        proposed_targets = set(proposal.target_files)
+                        if not proposed_targets.issubset(approved_targets):
+                            raise ValueError(
+                                "Coder target_files must remain within the approved plan: "
+                                f"approved={approved_plan['target_files']}, "
+                                f"returned={proposal.target_files}"
+                            )
+                        # An unchanged planned file need not be echoed by the coder. Retain the
+                        # complete approved declaration while changed_paths is checked separately.
+                        proposal.target_files = list(approved_plan["target_files"])
                     artifact_root = (
                         f"iterations/iteration_{iteration:03d}/attempt_{attempt_number:02d}"
                     )
@@ -482,6 +537,39 @@ def main() -> None:
             improvement = convergence.observe(score_for_convergence)
             iteration_record["improvement_over_prior_best"] = improvement
 
+            if hasattr(llm, "reflect"):
+                reflection_context = build_reflection_context(
+                    iteration_record=iteration_record,
+                    approved_plan=context.get("approved_research_plan"),
+                    prior_best=prior_best_score,
+                    current_best=best_metrics,
+                    improvement=improvement,
+                )
+                try:
+                    reflection_result = llm.reflect(reflection_context)
+                    resources.add_llm_usage(**reflection_result.usage)
+                    iteration_record["reflection"] = {
+                        "status": "success",
+                        "content": reflection_result.reflection,
+                        "llm_usage": reflection_result.usage,
+                        "interaction_id": reflection_result.interaction_id,
+                    }
+                    logger.write_json(
+                        f"iterations/iteration_{iteration:03d}/reflection.json",
+                        reflection_result.reflection,
+                    )
+                except Exception as exc:
+                    record_failed_llm_usage(resources, exc)
+                    reflection_error = redact_secrets(repr(exc))
+                    iteration_record["reflection"] = {
+                        "status": "failed",
+                        "error": reflection_error,
+                    }
+                    logger.write_json(
+                        f"iterations/iteration_{iteration:03d}/reflection.json",
+                        {"status": "failed", "error": reflection_error},
+                    )
+
             history.append(
                 {
                     "iteration": iteration,
@@ -490,6 +578,7 @@ def main() -> None:
                     "accepted": iteration_record["accepted"],
                     "metrics": iteration_record.get("metrics"),
                     "error": iteration_record.get("error"),
+                    "reflection": iteration_record.get("reflection", {}).get("content"),
                 }
             )
             resources.usage.iterations = convergence.iterations

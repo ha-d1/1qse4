@@ -48,6 +48,30 @@ Store the API key in macOS Keychain using the prompt-based instructions in
 
 The full run is bounded by `agent_config.json`: at most 50 iterations, six hours, and convergence after three consecutive iterations without an improvement greater than 0.002. The SoCLaaS-hosted Qwen agent may propose changes only under `candidate/`; rejected or failed changes are rolled back. Each iteration records its hypothesis, patch, validation metrics, process output, errors, token usage, and wall-clock usage under `runs/`.
 
+### Agent architecture and reflection
+
+```text
+Qwen planner -> approved hypothesis -> Qwen coder -> candidate-only patch
+     ^                                                   |
+     |                                                   v
+reflection memory <- structured reflection <- validation/preflight
+```
+
+After every iteration, including implementation failures, the planning model writes a structured
+reflection containing a causal analysis, reusable lessons, a `continue`/`refine`/`close` decision,
+and one next action. The next iteration and later processes receive these reflections as research
+memory. A failed patch is therefore recorded as an implementation failure rather than incorrectly
+treated as evidence against the scientific hypothesis.
+
+The compact, Git-tracked audit trail is under `evidence/`. It contains aggregate token/runtime
+usage, every compact experiment outcome, the latest sustained three-iteration run, automatic
+reflections, checkpoint hashes, and the five accepted checkpoints. Refresh and verify it with:
+
+```bash
+.venv/bin/python build_evidence_package.py
+.venv/bin/python verify_evidence_package.py
+```
+
 ## Task Definition (the conventions are fixed; do not change them)
 
 | | |

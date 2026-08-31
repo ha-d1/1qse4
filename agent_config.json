@@ -20,10 +20,12 @@
     "provider": "soclaas",
     "model": "qwen3-coder-next",
     "planning_model": "qwen3.6:35b",
-    "planning_max_tokens": 1200,
-    "coding_max_tokens": 7000,
-    "coding_compact_max_tokens": 4500,
+    "planning_max_tokens": 1800,
+    "reflection_max_tokens": 900,
+    "coding_max_tokens": 12000,
+    "coding_compact_max_tokens": 6000,
     "temperature": 0.2,
+    "request_timeout_seconds": 180,
     "max_attempts": 1
   },
   "budget": {
@@ -33,7 +35,7 @@
     "max_wall_clock_seconds": 21600,
     "experiment_timeout_seconds": 1200,
     "max_repair_attempts": 1,
-    "max_llm_tokens_per_iteration": 24000,
+    "max_llm_tokens_per_iteration": 52000,
     "repair_token_reserve": 14000
   },
   "safety": {

@@ -29,6 +29,7 @@ from candidate.model import (
     user_author_history_scores,
 )
 from candidate.train import save_checkpoint
+from build_evidence_package import compact_iteration, latest_sustained_run
 from data import (
     FIELDS,
     USER_AUTHOR_FIELDS,
@@ -39,6 +40,7 @@ from data import (
     transform_rows,
 )
 from agent import (
+    build_reflection_context,
     candidate_sources,
     command_with_checkpoint,
     command_with_verified_data_dir,
@@ -56,7 +58,7 @@ from development_data import (
 from experiment_runner import ExperimentRunner
 from experiment_schema import ExperimentProposal
 from evaluate_ensemble import within_user_blend, within_user_zscore_average
-from llm_common import parse_plan, parse_proposal, redact_secrets
+from llm_common import parse_plan, parse_proposal, parse_reflection, redact_secrets
 from llm_common import SYSTEM_INSTRUCTION
 from llm_factory import create_llm_client
 from make_submission import score_unlabelled_rows, within_user_rank_average
@@ -69,6 +71,7 @@ from run_agent_with_keychain import find_data_dir, load_soclaas_key
 from resource_tracker import ResourceTracker
 from soclaas_client import SoCLaaSClient
 from verify_baseline import serialisable_metrics
+from verify_evidence_package import sha256, verify_evidence
 
 
 class DevelopmentDataTests(unittest.TestCase):
@@ -363,15 +366,17 @@ class ConvergenceTests(unittest.TestCase):
         config = json.loads((PROJECT_ROOT / "agent_config.json").read_text())
         self.assertEqual(config["budget"]["max_repair_attempts"], 1)
         self.assertEqual(config["budget"]["repair_token_reserve"], 14000)
-        self.assertEqual(config["budget"]["max_llm_tokens_per_iteration"], 24000)
+        self.assertEqual(config["budget"]["max_llm_tokens_per_iteration"], 52000)
 
 
 class ProposalTests(unittest.TestCase):
     def test_coder_contract_routes_candidate_data_and_forbids_valid_label_features(self) -> None:
         self.assertIn("from candidate.data import", SYSTEM_INSTRUCTION)
         self.assertIn("Validation labels are evaluation-only", SYSTEM_INSTRUCTION)
-        self.assertIn("Prefer a concise unified diff", SYSTEM_INSTRUCTION)
+        self.assertIn("For a narrow local edit", SYSTEM_INSTRUCTION)
+        self.assertIn("prefer complete file_updates", SYSTEM_INSTRUCTION)
         self.assertIn("checkpointed inference parameters V, W, or b", SYSTEM_INSTRUCTION)
+        self.assertIn("never implement X @ V", SYSTEM_INSTRUCTION)
 
     def test_rejects_changes_outside_candidate(self) -> None:
         proposal = ExperimentProposal(
@@ -482,9 +487,85 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(completions.call["model"], "qwen3.6:35b")
         self.assertEqual(completions.call["max_tokens"], 1200)
 
+    def test_soclaas_reflection_is_structured_and_uses_planning_model(self) -> None:
+        reflection = {
+            "outcome_summary": "The patch failed preflight.",
+            "hypothesis_assessment": "The scientific hypothesis remains untested.",
+            "causal_analysis": "The failure was an unsupported CLI option.",
+            "evidence": ["preflight_status=failed"],
+            "lessons": ["Validate CLI options before a full experiment."],
+            "direction_decision": "refine",
+            "next_action": "Repair only the command and rerun the same control.",
+            "confidence": 0.9,
+        }
+        response = SimpleNamespace(
+            id="reflection-mock",
+            usage=SimpleNamespace(prompt_tokens=25, completion_tokens=15, total_tokens=40),
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(reflection)))],
+        )
+
+        class Completions:
+            def __init__(self):
+                self.call = None
+
+            def create(self, **kwargs):
+                self.call = kwargs
+                return response
+
+        completions = Completions()
+        adapter = SoCLaaSClient(
+            client=SimpleNamespace(chat=SimpleNamespace(completions=completions)),
+            planning_model="qwen3.6:35b",
+        )
+        result = adapter.reflect({"iteration": 1, "outcome": {"status": "failed"}})
+        self.assertEqual(result.reflection["direction_decision"], "refine")
+        self.assertEqual(result.usage["total_tokens"], 40)
+        self.assertEqual(completions.call["model"], "qwen3.6:35b")
+        self.assertEqual(completions.call["max_tokens"], 900)
+
+    def test_reflection_parser_rejects_invalid_decision(self) -> None:
+        reflection = {
+            "outcome_summary": "x",
+            "hypothesis_assessment": "x",
+            "causal_analysis": "x",
+            "evidence": [],
+            "lessons": ["lesson"],
+            "direction_decision": "repeat forever",
+            "next_action": "x",
+            "confidence": 0.5,
+        }
+        with self.assertRaisesRegex(ValueError, "direction_decision"):
+            parse_reflection(json.dumps(reflection))
+
+    def test_reflection_context_omits_generated_source_code(self) -> None:
+        context = build_reflection_context(
+            iteration_record={
+                "iteration": 1,
+                "status": "failed",
+                "accepted": False,
+                "attempts": [
+                    {
+                        "attempt": 1,
+                        "kind": "proposal",
+                        "status": "failed",
+                        "error": "bad patch",
+                        "proposal": {"hypothesis": "try DCN", "patch": "large source"},
+                    }
+                ],
+            },
+            approved_plan={"hypothesis": "try DCN"},
+            prior_best=0.6045,
+            current_best={"primary": 0.6045},
+            improvement=0.0,
+        )
+        serialised = json.dumps(context)
+        self.assertIn("try DCN", serialised)
+        self.assertNotIn("large source", serialised)
+
     def test_compact_reference_contracts_replace_full_protected_sources(self) -> None:
         contracts = reference_api_contracts()
         self.assertIn("make_bpr_pairs", contracts["baseline.py"])
+        self.assertIn("V[X]", contracts["baseline.py"])
         self.assertIn("load_training_auxiliary", contracts["development_data.py"])
         self.assertLess(sum(map(len, contracts.values())), 2_000)
 
@@ -599,6 +680,18 @@ class ProposalTests(unittest.TestCase):
         proposal = parse_proposal(json.dumps(payload))
         self.assertEqual(proposal.patch, "")
         self.assertEqual(proposal.file_updates[0]["path"], "candidate/model.py")
+
+    def test_proposal_restores_command_from_approved_plan(self) -> None:
+        payload = self.proposal_payload()
+        del payload["command"]
+        proposal = parse_proposal(
+            json.dumps(payload),
+            approved_plan={
+                "command": ["python", "candidate/train.py", "--objective", "bpr"],
+                "target_files": ["candidate/model.py"],
+            },
+        )
+        self.assertEqual(proposal.command[1], "candidate/train.py")
 
     def test_auxiliary_proposal_requires_shared_parameter_preflight(self) -> None:
         payload = self.proposal_payload()
@@ -980,6 +1073,13 @@ class RunnerAndLoggerTests(unittest.TestCase):
                         "status": "failed",
                         "accepted": False,
                         "error": "string user id",
+                        "reflection": {
+                            "status": "success",
+                            "content": {
+                                "lessons": ["Preserve opaque string IDs."],
+                                "direction_decision": "refine",
+                            },
+                        },
                         "attempts": [
                             {
                                 "proposal": {"hypothesis": "ListNet"},
@@ -992,12 +1092,92 @@ class RunnerAndLoggerTests(unittest.TestCase):
             history = load_prior_experiment_history(Path(tmp))
             self.assertEqual(history[0]["hypothesis"], "ListNet")
             self.assertEqual(history[0]["last_preflight"]["status"], "failed")
+            self.assertEqual(
+                history[0]["reflection"]["lessons"], ["Preserve opaque string IDs."]
+            )
+
+    def test_evidence_selects_multi_iteration_run_and_keeps_reflections(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = Path(tmp)
+            run = runs / "run_20260101T000000Z"
+            for iteration in range(1, 4):
+                result = run / "iterations" / f"iteration_{iteration:03d}" / "result.json"
+                result.parent.mkdir(parents=True)
+                result.write_text(
+                    json.dumps(
+                        {
+                            "iteration": iteration,
+                            "status": "failed",
+                            "accepted": False,
+                            "attempts": [],
+                            "reflection": {
+                                "status": "success",
+                                "content": {"lessons": [f"lesson {iteration}"]},
+                            },
+                            "resources": {"total_tokens": iteration},
+                        }
+                    )
+                )
+            (run / "summary.json").write_text(json.dumps({"stop_reason": "converged"}))
+            sustained = latest_sustained_run(runs)
+            compact = compact_iteration(
+                run / "iterations" / "iteration_001" / "result.json"
+            )
+        self.assertEqual(len(sustained["iterations"]), 3)
+        self.assertEqual(compact["reflection"]["lessons"], ["lesson 1"])
+
+    def test_evidence_verifier_checks_reflections_and_checkpoint_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence = Path(tmp)
+            checkpoint = evidence / "checkpoints" / "seed0.npz"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"checkpoint")
+            (evidence / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "hidden_test_labels_evaluated": False,
+                        "evaluate_py_changed_from_starter": False,
+                    }
+                )
+            )
+            (evidence / "sustained_run.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": "run_test",
+                        "iterations": [
+                            {"iteration": value, "reflection_status": "success"}
+                            for value in range(1, 4)
+                        ],
+                    }
+                )
+            )
+            (evidence / "checkpoint_manifest.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "file": "checkpoints/seed0.npz",
+                            "sha256": sha256(checkpoint),
+                        }
+                    ]
+                )
+            )
+            result = verify_evidence(evidence)
+        self.assertEqual(result["status"], "verified")
+        self.assertEqual(result["reflections"], 3)
 
     def test_generated_data_path_is_replaced_with_verified_path(self) -> None:
         command = ["python", "candidate/train.py", "--data_dir", "data", "--seed", "0"]
         result = command_with_verified_data_dir(command, Path("/verified/data"))
         self.assertNotIn("data", result)
         self.assertEqual(result[-2:], ["--data_dir", "/verified/data"])
+
+    def test_generated_batch_size_alias_is_normalized(self) -> None:
+        result = command_with_verified_data_dir(
+            ["python", "candidate/train.py", "--batch_size", "256"],
+            Path("/verified/data"),
+        )
+        self.assertIn("--batch-size", result)
+        self.assertNotIn("--batch_size", result)
 
     def test_planner_cli_aliases_are_normalized(self) -> None:
         command = [

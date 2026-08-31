@@ -88,15 +88,44 @@ PLAN_SCHEMA = {
     "additionalProperties": False,
 }
 
+REFLECTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "outcome_summary": {"type": "string"},
+        "hypothesis_assessment": {"type": "string"},
+        "causal_analysis": {"type": "string"},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "lessons": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "direction_decision": {
+            "type": "string",
+            "enum": ["continue", "refine", "close"],
+        },
+        "next_action": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    },
+    "required": [
+        "outcome_summary",
+        "hypothesis_assessment",
+        "causal_analysis",
+        "evidence",
+        "lessons",
+        "direction_decision",
+        "next_action",
+        "confidence",
+    ],
+    "additionalProperties": False,
+}
+
 SYSTEM_INSTRUCTION = """You are the research planner for KuaiRand-Pure.
 Optimise validation primary = mean(GAUC, nDCG@5), using long_view labels.
 Use train and validation only. Never request, infer, or evaluate test labels.
 Propose exactly one controlled, falsifiable change per iteration.
 Only files under candidate/ may be changed. Do not modify official evaluation code.
-Prefer a concise unified diff in patch and omit file_updates. Use exact
---- a/candidate/... and +++ b/candidate/... headers with enough unchanged context for git apply.
-Use full-file file_updates only as a fallback when a safe concise diff is impractical; if used,
-set patch to an empty string. Never populate both patch and file_updates.
+For a narrow local edit, use a concise unified diff in patch with exact
+--- a/candidate/... and +++ b/candidate/... headers and enough unchanged context for git apply.
+For an architecture change spanning a class or multiple functions, prefer complete file_updates;
+the harness will generate the diff deterministically. Include only files whose contents actually
+change, set patch to an empty string, and never populate both patch and file_updates.
 Use prior evidence, avoid repeated failed ideas, and consider runtime cost.
 The implementation must genuinely optimise the objective named in the hypothesis. Do not
 describe a listwise loss while secretly using BPR updates, and do not pass score gradients
@@ -126,6 +155,10 @@ in integer NumPy arrays; group by string or create an explicit dictionary mappin
 load_development_splits returns dictionaries of raw seven-field row tuples, not encoded
 (X, y, users) triples. Use data.encode(splits) before unpacking encoded arrays, following the
 existing candidate/model.py control path.
+Encoded X is an integer categorical-ID matrix shaped [rows, field_count], usually [rows, 5].
+The FM dimension is the global categorical vocabulary size, not field_count. Interactions must
+gather embeddings with V[X] and linear weights with W[X]; never implement X @ V, because X is
+not a dense feature or one-hot matrix.
 Return only one JSON object matching the requested schema."""
 
 PLANNER_SYSTEM_INSTRUCTION = """You are the senior autonomous ML researcher for
@@ -134,12 +167,21 @@ mean(GAUC, nDCG@5) beyond the user's existing BPR candidate. Use long_view and t
 only. Do not rediscover plain BPR, access test labels, or modify files outside candidate/.
 Choose a scientifically valid objective and provide concrete mathematical and implementation
 requirements for a coding model. Keep the plan narrow enough for one bounded iteration.
-Use recent_experiments as persistent memory. If the latest attempt reached preflight and has a
+Use recent_experiments and their structured reflections as persistent memory. Apply recorded
+lessons and direction decisions rather than merely repeating the last hypothesis. If the latest attempt reached preflight and has a
 small, localized implementation error, prefer a focused repair of that promising experiment;
 otherwise avoid repeating the failed implementation.
 Treat completed_autonomous_directions as closed research branches. Never propose a direction
 whose decision is rejected, even if you believe a minor implementation variant might improve it.
 Return only one JSON object matching the requested schema."""
+
+REFLECTION_SYSTEM_INSTRUCTION = """You are the reflective component of an autonomous ML
+research agent for KuaiRand-Pure. Analyse one completed iteration using only the supplied
+train/validation evidence. Distinguish scientific evidence from implementation failure: a failed
+patch does not disprove a hypothesis, while a completed non-improving validation result does.
+Extract concise reusable lessons, decide whether to continue, refine, or close the direction, and
+recommend one concrete next action. Never claim hidden-test evidence. Return only one JSON object
+matching the requested schema."""
 
 
 @dataclass
@@ -153,6 +195,14 @@ class ProposalResult:
 @dataclass
 class PlanningResult:
     plan: Dict[str, Any]
+    usage: Dict[str, int]
+    interaction_id: str | None
+    raw_text: str
+
+
+@dataclass
+class ReflectionResult:
+    reflection: Dict[str, Any]
     usage: Dict[str, int]
     interaction_id: str | None
     raw_text: str
@@ -186,6 +236,18 @@ def planning_prompt(context: Dict[str, Any]) -> str:
             "task": "Select the next single bounded research experiment.",
             "context": context,
             "plan_schema": PLAN_SCHEMA,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def reflection_prompt(context: Dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "task": "Reflect on the completed experiment and update research memory.",
+            "context": context,
+            "reflection_schema": REFLECTION_SCHEMA,
         },
         ensure_ascii=False,
         indent=2,
@@ -248,7 +310,41 @@ def parse_plan(raw_text: str) -> Dict[str, Any]:
     return payload
 
 
-def parse_proposal(raw_text: str) -> ExperimentProposal:
+def parse_reflection(raw_text: str) -> Dict[str, Any]:
+    text = raw_text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    if not text.startswith("{"):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+    payload = json.loads(text)
+    missing = set(REFLECTION_SCHEMA["required"]) - set(payload)
+    if missing:
+        raise ValueError(f"Invalid reflection fields: missing={sorted(missing)}")
+    payload = {
+        key: payload[key] for key in REFLECTION_SCHEMA["properties"] if key in payload
+    }
+    if payload["direction_decision"] not in {"continue", "refine", "close"}:
+        raise ValueError("Reflection direction_decision must be continue, refine, or close")
+    if not payload["lessons"] or not all(
+        isinstance(lesson, str) and lesson.strip() for lesson in payload["lessons"]
+    ):
+        raise ValueError("Reflection requires at least one non-empty lesson")
+    confidence = float(payload["confidence"])
+    if not 0.0 <= confidence <= 1.0:
+        raise ValueError("Reflection confidence must be between 0 and 1")
+    payload["confidence"] = confidence
+    return payload
+
+
+def parse_proposal(
+    raw_text: str, approved_plan: Dict[str, Any] | None = None
+) -> ExperimentProposal:
     text = raw_text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
@@ -258,6 +354,15 @@ def parse_proposal(raw_text: str) -> ExperimentProposal:
             lines = lines[:-1]
         text = "\n".join(lines)
     payload = json.loads(text)
+    # The approved planner output is authoritative for the execution contract. Coding models
+    # occasionally omit command or target_files after spending most of their response on source
+    # code. Restore those exact planner-approved fields locally instead of paying for a repair
+    # call or allowing the coder to invent a different experiment.
+    if approved_plan:
+        if not payload.get("command"):
+            payload["command"] = approved_plan.get("command")
+        if not payload.get("target_files"):
+            payload["target_files"] = approved_plan.get("target_files")
     # Some coding models redundantly populate both supported change formats despite the
     # contract. Prefer deterministic full-file materialisation when those updates are
     # structurally usable; otherwise retain the concise patch. This avoids a second LLM call

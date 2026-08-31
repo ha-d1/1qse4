@@ -1,0 +1,42 @@
+[
+  {
+    "file": "checkpoints/seed0.npz",
+    "present": true,
+    "bytes": 2508587,
+    "sha256": "6f76f7040ddab729dfbfe277f285eb767968d443a91e8f8d9a30ceda6c8b7c41",
+    "objective": "four-negative BPR FM",
+    "learning_rate": 0.00025
+  },
+  {
+    "file": "checkpoints/seed1.npz",
+    "present": true,
+    "bytes": 2508255,
+    "sha256": "c319d92aaa03919adca1d6d20dbe55dde864542646ca0b3c4051a3754240af69",
+    "objective": "four-negative BPR FM",
+    "learning_rate": 0.00025
+  },
+  {
+    "file": "checkpoints/seed2.npz",
+    "present": true,
+    "bytes": 2508788,
+    "sha256": "b39dc077c55c4af6cdc36b7c0918c295ac367f460b67823e69af40dd4049608c",
+    "objective": "four-negative BPR FM",
+    "learning_rate": 0.00025
+  },
+  {
+    "file": "checkpoints/seed3.npz",
+    "present": true,
+    "bytes": 2507808,
+    "sha256": "7b200c2a188ab1b389d6f8c0b0c4e5ef763bf80d9ef455a20295222650f3c9c1",
+    "objective": "four-negative BPR FM",
+    "learning_rate": 0.00025
+  },
+  {
+    "file": "checkpoints/seed4.npz",
+    "present": true,
+    "bytes": 2507927,
+    "sha256": "e82aceb18aafa1844de5cfd8bcd3e4d4c20a90d98b88f9695a9c9521575b0f40",
+    "objective": "four-negative BPR FM",
+    "learning_rate": 0.00025
+  }
+]

@@ -40,6 +40,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--k", type=int, default=16)
     parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--batch-size", type=int, default=8192)
     parser.add_argument("--negatives-per-positive", type=int, default=1)
     parser.add_argument(
         "--negative-strategy", choices=["random", "hard"], default="random"
@@ -70,6 +71,7 @@ def main() -> None:
         epochs=args.epochs,
         k=args.k,
         lr=args.lr,
+        batch_size=args.batch_size,
         feature_set=args.feature_set,
         negatives_per_positive=args.negatives_per_positive,
         auxiliary_targets=auxiliary_targets,
@@ -88,6 +90,7 @@ def main() -> None:
                 "epochs_requested": args.epochs,
                 "k": args.k,
                 "lr": args.lr,
+                "batch_size": args.batch_size,
                 "feature_set": args.feature_set,
                 "negatives_per_positive": args.negatives_per_positive,
                 "auxiliary_task": args.auxiliary_task,
