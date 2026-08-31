@@ -266,6 +266,12 @@ def main() -> None:
                 try:
                     planning_result = llm.plan(planning_context)
                     resources.add_llm_usage(**planning_result.usage)
+                    if planning_result.plan["direction"] not in context["available_directions"]:
+                        raise ValueError(
+                            "Research plan must select an exact available direction: "
+                            f"selected={planning_result.plan['direction']!r}, "
+                            f"available={context['available_directions']!r}"
+                        )
                     context["approved_research_plan"] = planning_result.plan
                     context["llm_budget"] = {
                         "coding_max_tokens": coding_token_budget(

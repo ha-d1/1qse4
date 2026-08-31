@@ -188,6 +188,14 @@ def build_research_context(
                     "diversity did not improve."
                 ),
             },
+            {
+                "direction": "click-based auxiliary objectives",
+                "decision": "closed after multiple non-improving or invalid implementations",
+                "instruction": (
+                    "Do not propose click BCE, click pair mixing, or another click auxiliary "
+                    "head, whether detached or shared. Move to an explicitly available direction."
+                ),
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",
@@ -248,6 +256,7 @@ def build_research_context(
             "appended auxiliary feature matrices are suspended after repeated implementation failures",
             "DataFrame-based recency from unavailable event timestamps is suspended",
             "shared-parameter watch-duration MSE is rejected on validation",
+            "all click-based auxiliary objectives are closed",
             "detached auxiliary heads are rejected; multitask gradients must update shared ranking parameters",
             "uniform BPR sampling beyond four negatives is rejected",
             "current-score hard-negative mining is rejected",

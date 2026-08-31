@@ -732,6 +732,7 @@ class ProposalTests(unittest.TestCase):
         self.assertIn("detached click auxiliary head", completed)
         self.assertIn("auxiliary signals as appended input features", completed)
         self.assertIn("unavailable event timestamps", completed)
+        self.assertIn("click-based auxiliary objectives", completed)
         self.assertNotIn(
             "multi-objective learning with train-only auxiliary feedback",
             context["available_directions"],

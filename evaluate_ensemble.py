@@ -96,7 +96,7 @@ def within_user_blend(base_scores, extra_scores, users, alpha):
     return combined
 
 
-def validation_ensemble_results(checkpoints, data_dir):
+def validation_ensemble_results(checkpoints, data_dir, full_only=False):
     splits = load_selected(data_dir, ["train", "valid"])
     train_rows = splits["train"]
     valid_rows = splits["valid"]
@@ -107,7 +107,8 @@ def validation_ensemble_results(checkpoints, data_dir):
         for checkpoint in checkpoints
     ]
     results = []
-    for size in range(1, len(checkpoints) + 1):
+    sizes = (len(checkpoints),) if full_only else range(1, len(checkpoints) + 1)
+    for size in sizes:
         for members in itertools.combinations(range(len(checkpoints)), size):
             selected = [score_arrays[index] for index in members]
             aggregations = {
@@ -155,9 +156,16 @@ def main() -> None:
     parser.add_argument("--checkpoint", action="append", required=True)
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--top", type=int, default=10)
+    parser.add_argument(
+        "--full-only",
+        action="store_true",
+        help="Evaluate only the complete checkpoint ensemble, avoiding subset selection.",
+    )
     args = parser.parse_args()
     checkpoints = [Path(value) for value in args.checkpoint]
-    results = validation_ensemble_results(checkpoints, args.data_dir)
+    results = validation_ensemble_results(
+        checkpoints, args.data_dir, full_only=args.full_only
+    )
     print(
         json.dumps(
             {
