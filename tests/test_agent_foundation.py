@@ -37,6 +37,7 @@ from agent import (
     command_with_checkpoint,
     command_with_verified_data_dir,
     load_prior_experiment_history,
+    record_failed_llm_usage,
     reference_api_contracts,
 )
 from development_data import (
@@ -398,6 +399,24 @@ class ProposalTests(unittest.TestCase):
         client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
         with self.assertRaisesRegex(RuntimeError, "SoCLaaS proposal failed"):
             SoCLaaSClient(client=client, max_attempts=1).propose({"iteration": 1})
+
+    def test_failed_structured_response_preserves_billable_usage(self) -> None:
+        response = SimpleNamespace(
+            id="bad-json",
+            usage=SimpleNamespace(prompt_tokens=9, completion_tokens=4, total_tokens=13),
+            choices=[SimpleNamespace(message=SimpleNamespace(content="{unfinished"))],
+        )
+
+        class Completions:
+            def create(self, **kwargs):
+                return response
+
+        client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+        with self.assertRaises(RuntimeError) as caught:
+            SoCLaaSClient(client=client, max_attempts=1).propose({"iteration": 1})
+        resources = ResourceTracker()
+        record_failed_llm_usage(resources, caught.exception)
+        self.assertEqual(resources.snapshot()["total_tokens"], 13)
 
     def test_soclaas_planning_stage_uses_autonomous_model(self) -> None:
         plan = {

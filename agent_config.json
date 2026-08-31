@@ -23,7 +23,7 @@
     "planning_max_tokens": 1200,
     "coding_max_tokens": 7000,
     "temperature": 0.2,
-    "max_attempts": 3
+    "max_attempts": 1
   },
   "budget": {
     "epsilon": 0.002,

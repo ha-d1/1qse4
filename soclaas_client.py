@@ -20,6 +20,19 @@ from llm_common import (
 DEFAULT_BASE_URL = "https://soclaas-api.comp.nus.edu.sg/v1"
 
 
+class SoCLaaSRequestError(RuntimeError):
+    """Provider failure carrying any billable usage returned before parsing failed."""
+
+    def __init__(self, message: str, usage: Dict[str, int]) -> None:
+        super().__init__(message)
+        self.usage = usage
+
+
+def _add_usage(total: Dict[str, int], addition: Dict[str, int]) -> None:
+    for field in ("prompt_tokens", "response_tokens", "total_tokens"):
+        total[field] += int(addition.get(field, 0))
+
+
 class SoCLaaSClient:
     def __init__(
         self,
@@ -69,6 +82,7 @@ class SoCLaaSClient:
 
     def _request(self, context: Dict[str, Any], recovery: Dict[str, Any] | None) -> ProposalResult:
         last_error: Exception | None = None
+        cumulative_usage = {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
         for attempt in range(1, self.max_attempts + 1):
             try:
                 response = self.client.chat.completions.create(
@@ -82,11 +96,12 @@ class SoCLaaSClient:
                     response_format={"type": "json_object"},
                 )
                 raw_text = response.choices[0].message.content
+                _add_usage(cumulative_usage, self._usage(response))
                 if not raw_text:
                     raise ValueError("SoCLaaS returned an empty proposal")
                 return ProposalResult(
                     proposal=parse_proposal(raw_text),
-                    usage=self._usage(response),
+                    usage=cumulative_usage,
                     interaction_id=getattr(response, "id", None),
                     raw_text=raw_text,
                 )
@@ -94,9 +109,10 @@ class SoCLaaSClient:
                 last_error = exc
                 if attempt < self.max_attempts:
                     time.sleep(min(2 ** (attempt - 1), 4))
-        raise RuntimeError(
+        raise SoCLaaSRequestError(
             f"SoCLaaS proposal failed after {self.max_attempts} attempts: "
-            f"{type(last_error).__name__}: {last_error}"
+            f"{type(last_error).__name__}: {last_error}",
+            cumulative_usage,
         ) from last_error
 
     def propose(self, context: Dict[str, Any]) -> ProposalResult:
@@ -104,6 +120,7 @@ class SoCLaaSClient:
 
     def plan(self, context: Dict[str, Any]) -> PlanningResult:
         last_error: Exception | None = None
+        cumulative_usage = {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
         for attempt in range(1, self.max_attempts + 1):
             try:
                 response = self.client.chat.completions.create(
@@ -117,11 +134,12 @@ class SoCLaaSClient:
                     response_format={"type": "json_object"},
                 )
                 raw_text = response.choices[0].message.content
+                _add_usage(cumulative_usage, self._usage(response))
                 if not raw_text:
                     raise ValueError("SoCLaaS returned an empty research plan")
                 return PlanningResult(
                     plan=parse_plan(raw_text),
-                    usage=self._usage(response),
+                    usage=cumulative_usage,
                     interaction_id=getattr(response, "id", None),
                     raw_text=raw_text,
                 )
@@ -129,9 +147,10 @@ class SoCLaaSClient:
                 last_error = exc
                 if attempt < self.max_attempts:
                     time.sleep(min(2 ** (attempt - 1), 4))
-        raise RuntimeError(
+        raise SoCLaaSRequestError(
             f"SoCLaaS planning failed after {self.max_attempts} attempts: "
-            f"{type(last_error).__name__}: {last_error}"
+            f"{type(last_error).__name__}: {last_error}",
+            cumulative_usage,
         ) from last_error
 
     def repair(self, context: Dict[str, Any], recovery: Dict[str, Any]) -> ProposalResult:

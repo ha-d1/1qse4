@@ -71,6 +71,13 @@ def parse_metrics(stdout: str) -> dict:
     return {key: float(metrics[key]) for key in required}
 
 
+def record_failed_llm_usage(resources: ResourceTracker, error: Exception) -> None:
+    """Count provider usage even when a structured response could not be parsed."""
+    usage = getattr(error, "usage", None)
+    if isinstance(usage, dict) and usage.get("total_tokens", 0):
+        resources.add_llm_usage(**usage)
+
+
 def load_prior_experiment_history(runs_dir: Path, limit: int = 8) -> list[dict]:
     """Load compact, redacted outcomes from earlier runs for cross-run memory."""
     records = []
@@ -240,6 +247,7 @@ def main() -> None:
                         planning_result.plan,
                     )
                 except Exception as exc:
+                    record_failed_llm_usage(resources, exc)
                     error = redact_secrets(repr(exc))
                     planning_failed = True
                     iteration_record.update(
@@ -375,6 +383,7 @@ def main() -> None:
                     )
                     break
                 except Exception as exc:
+                    record_failed_llm_usage(resources, exc)
                     if patch_applied and proposal is not None:
                         patches.rollback(experiment_patch)
                     error = redact_secrets(repr(exc))
