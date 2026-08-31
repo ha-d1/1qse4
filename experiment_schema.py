@@ -15,6 +15,7 @@ class ExperimentProposal:
     patch: str
     command: List[str]
     file_updates: List[Dict[str, str]] = field(default_factory=list)
+    implementation_mode: Literal["patch", "scaffold"] = "patch"
 
     def validate(self) -> None:
         if not self.hypothesis.strip() or not self.reasoning.strip():
@@ -23,10 +24,12 @@ class ExperimentProposal:
             raise ValueError("Proposal must name at least one target file")
         has_patch = bool(self.patch.strip())
         has_file_updates = bool(self.file_updates)
-        if has_patch == has_file_updates:
+        if self.implementation_mode == "patch" and has_patch == has_file_updates:
             raise ValueError(
                 "Proposal must include exactly one of a unified diff patch or file_updates"
             )
+        if self.implementation_mode == "scaffold" and (has_patch or has_file_updates):
+            raise ValueError("Scaffold proposals must not include generated code changes")
         if not self.command:
             raise ValueError("Proposal must provide an argv-style command")
         if len(self.command) < 2 or self.command[1] != "candidate/train.py":

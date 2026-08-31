@@ -24,6 +24,7 @@ from candidate_preflight import (
     synthetic_training_auxiliary,
 )
 from candidate.model import (
+    FieldWeightedFM,
     blend_within_user,
     make_hard_bpr_pairs,
     user_author_history_scores,
@@ -46,6 +47,7 @@ from agent import (
     command_with_verified_data_dir,
     coding_token_budget,
     load_prior_experiment_history,
+    proposal_from_scaffold,
     proposal_requires_shared_parameter_effect,
     record_failed_llm_usage,
     reference_api_contracts,
@@ -131,6 +133,52 @@ class DevelopmentDataTests(unittest.TestCase):
         self.assertEqual(len(scores), 1)
         self.assertTrue(np.isfinite(scores).all())
         self.assertEqual(metadata["feature_set"], "base")
+
+    def test_field_weighted_checkpoint_scores_unlabelled_rows(self) -> None:
+        train = [
+            (20220408, "u1", "v1", "a1", "t", 10.0, 1),
+            (20220409, "u1", "v2", "a2", "t", 20.0, 0),
+        ]
+        target = [(20220429, "u1", "v3", "a1", "t", 15.0)]
+        encoder = fit_feature_encoder(train, fields=FIELDS)
+        model = FieldWeightedFM(encoder["dimension"], field_count=5, k=2, lr=0.00025)
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = save_checkpoint(
+                Path(tmp) / "field.npz",
+                model,
+                {
+                    "feature_set": "base",
+                    "lr": 0.00025,
+                    "architecture": "field_weighted",
+                },
+            )
+            scores, metadata = score_unlabelled_rows(checkpoint, train, target)
+        self.assertEqual(metadata["architecture"], "field_weighted")
+        self.assertTrue(np.isfinite(scores).all())
+
+    def test_field_weighted_unit_gates_match_standard_fm_scores(self) -> None:
+        from baseline import FM
+
+        standard = FM(20, k=3, seed=4)
+        weighted = FieldWeightedFM(20, field_count=5, k=3, seed=9)
+        weighted.V = standard.V.copy()
+        weighted.W = standard.W.copy()
+        weighted.b = standard.b
+        X = np.asarray([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]], dtype=np.int32)
+        np.testing.assert_allclose(weighted.predict(X), standard.predict(X), atol=1e-7)
+
+    def test_field_weighted_bpr_updates_pair_gates(self) -> None:
+        model = FieldWeightedFM(30, field_count=5, k=3, seed=2)
+        before = model.field_pair_weights.copy()
+        positive = np.asarray(
+            [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]], dtype=np.int32
+        )
+        negative = np.asarray(
+            [[10, 11, 12, 13, 14], [15, 16, 17, 18, 19]], dtype=np.int32
+        )
+        loss = model.step_bpr(positive, negative)
+        self.assertTrue(np.isfinite(loss))
+        self.assertFalse(np.array_equal(before, model.field_pair_weights))
 
     def test_within_user_rank_ensemble_is_group_local(self) -> None:
         combined = within_user_rank_average(
@@ -612,6 +660,27 @@ class ProposalTests(unittest.TestCase):
         self.assertNotIn("task", parsed)
         self.assertEqual(parsed["hypothesis"], "h")
 
+    def test_plan_parser_recovers_missing_hypothesis_for_single_scaffold(self) -> None:
+        direction = "prevalidated field-pair-weighted FM interaction scaffold"
+        scaffold = {
+            "target_files": ["candidate/model.py", "candidate/train.py"],
+            "scientific_change": "Learn field-pair gates.",
+            "command": ["python", "candidate/train.py", "--architecture", "field_weighted"],
+        }
+        plan = {
+            "reasoning": "Use the tested scaffold.",
+            "direction": direction,
+            "target_files": scaffold["target_files"],
+            "implementation_requirements": ["Use the scaffold."],
+            "command": scaffold["command"],
+            "risk": "May not improve.",
+        }
+        parsed = parse_plan(
+            json.dumps(plan),
+            context={"prevalidated_experiment_scaffolds": {direction: scaffold}},
+        )
+        self.assertIn("field-pair", parsed["hypothesis"])
+
     def test_plan_parser_normalizes_candidate_script_command(self) -> None:
         plan = {
             "hypothesis": "h",
@@ -831,6 +900,34 @@ class ProposalTests(unittest.TestCase):
             "multi-objective learning with train-only auxiliary feedback",
             context["available_directions"],
         )
+        direction = "prevalidated field-pair-weighted FM interaction scaffold"
+        self.assertEqual(context["available_directions"], [])
+        self.assertNotIn(direction, context["available_directions"])
+        self.assertEqual(
+            context["completed_prevalidated_experiment_scaffolds"][direction]["implementation_mode"],
+            "scaffold",
+        )
+
+    def test_scaffold_proposal_requires_no_generated_patch(self) -> None:
+        plan = {
+            "hypothesis": "Field-pair gates improve the FM interaction.",
+            "reasoning": "Different field pairs need different weights.",
+            "risk": "The gates may overfit.",
+        }
+        scaffold = {
+            "target_files": ["candidate/model.py", "candidate/train.py"],
+            "command": [
+                "python",
+                "candidate/train.py",
+                "--architecture",
+                "field_weighted",
+            ],
+        }
+        result = proposal_from_scaffold(plan, scaffold, iteration=2)
+        self.assertEqual(result.proposal.implementation_mode, "scaffold")
+        self.assertEqual(result.proposal.patch, "")
+        self.assertEqual(result.usage["total_tokens"], 0)
+        self.assertFalse(proposal_requires_shared_parameter_effect(result.proposal))
 
 
 class PatchManagerTests(unittest.TestCase):
@@ -1145,7 +1242,12 @@ class RunnerAndLoggerTests(unittest.TestCase):
                     {
                         "run_id": "run_test",
                         "iterations": [
-                            {"iteration": value, "reflection_status": "success"}
+                            {
+                                "iteration": value,
+                                "reflection_status": "success",
+                                "status": "success" if value == 1 else "failed",
+                                "primary": 0.6 if value == 1 else None,
+                            }
                             for value in range(1, 4)
                         ],
                     }
@@ -1164,6 +1266,7 @@ class RunnerAndLoggerTests(unittest.TestCase):
             result = verify_evidence(evidence)
         self.assertEqual(result["status"], "verified")
         self.assertEqual(result["reflections"], 3)
+        self.assertEqual(result["completed_validations"], 1)
 
     def test_generated_data_path_is_replaced_with_verified_path(self) -> None:
         command = ["python", "candidate/train.py", "--data_dir", "data", "--seed", "0"]

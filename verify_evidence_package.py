@@ -30,6 +30,11 @@ def verify_evidence(evidence_dir: Path) -> dict:
     ]
     if missing_reflections:
         raise ValueError(f"Sustained-run reflections are missing: {missing_reflections}")
+    completed_validations = [
+        item for item in iterations if item.get("status") == "success" and item.get("primary") is not None
+    ]
+    if not completed_validations:
+        raise ValueError("Sustained run has no completed validation experiment")
     for record in checkpoints:
         path = evidence_dir / record["file"]
         if not path.is_file() or sha256(path) != record.get("sha256"):
@@ -39,6 +44,7 @@ def verify_evidence(evidence_dir: Path) -> dict:
         "sustained_run": sustained["run_id"],
         "iterations": len(iterations),
         "reflections": len(iterations) - len(missing_reflections),
+        "completed_validations": len(completed_validations),
         "checkpoints": len(checkpoints),
     }
 

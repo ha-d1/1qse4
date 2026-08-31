@@ -209,6 +209,34 @@ def build_research_context(
                     "eight-seed ensemble underperformed the five-seed incumbent."
                 ),
             },
+            {
+                "direction": "generated diagonal-bilinear FM rewrites",
+                "decision": "closed after repeated implementation failures",
+                "evidence": {
+                    "sustained_runs": 3,
+                    "failure": "categorical-ID matrices were repeatedly treated as dense inputs",
+                },
+                "instruction": (
+                    "Do not generate another diagonal-bilinear FM rewrite. Use the prevalidated "
+                    "field-pair-weighted FM scaffold to test the broader interaction-reweighting "
+                    "hypothesis without repeating the implementation failure."
+                ),
+            },
+            {
+                "direction": "prevalidated field-pair-weighted FM interaction scaffold",
+                "decision": "rejected after matched-seed validation and closed by reflection",
+                "evidence": {
+                    "seed_0_primary": 0.6035248637199402,
+                    "seed_1_primary": 0.6030241250991821,
+                    "seed_2_primary": 0.6031533479690552,
+                    "mean_primary": 0.6032341122627258,
+                    "incumbent_primary": 0.604539155960083,
+                },
+                "instruction": (
+                    "Do not repeat field-pair gating. Three successful matched-seed validations "
+                    "underperformed the incumbent and all three reflections closed the direction."
+                ),
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",
@@ -244,9 +272,46 @@ def build_research_context(
             "remaining_iterations": remaining_iterations,
             "remaining_seconds": max(0.0, remaining_seconds),
         },
-        "available_directions": [
-            "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
-        ],
+        # Empty after the sustained run. This prevents another API call until a new direction
+        # has passed local preflight and is deliberately promoted into the allowlist.
+        "available_directions": [],
+        "prevalidated_experiment_scaffolds": {},
+        "completed_prevalidated_experiment_scaffolds": {
+            "prevalidated field-pair-weighted FM interaction scaffold": {
+                "implementation_mode": "scaffold",
+                "scientific_change": (
+                    "Learn one gate for each pair of the five categorical fields while preserving "
+                    "the four-negative BPR objective and the incumbent feature encoding."
+                ),
+                "target_files": ["candidate/model.py", "candidate/train.py"],
+                "seed_schedule": [0, 1, 2],
+                "command": [
+                    "python",
+                    "candidate/train.py",
+                    "--objective",
+                    "bpr",
+                    "--architecture",
+                    "field_weighted",
+                    "--seed",
+                    "0",
+                    "--epochs",
+                    "40",
+                    "--k",
+                    "16",
+                    "--lr",
+                    "0.00025",
+                    "--negatives-per-positive",
+                    "4",
+                    "--batch-size",
+                    "8192",
+                ],
+                "instruction": (
+                    "Select this exact direction. The implementation is already locally tested; "
+                    "do not request a generated rewrite. Evaluate the supplied command as the "
+                    "controlled alternative-interaction experiment."
+                ),
+            }
+        },
         "constraints": [
             "train and validation only",
             "one main hypothesis per iteration",
@@ -271,6 +336,7 @@ def build_research_context(
             "shared-parameter watch-duration MSE is rejected on validation",
             "all click-based auxiliary objectives are closed",
             "plain BPR ensemble expansion beyond five seeds is rejected",
+            "generated diagonal-bilinear FM rewrites are closed after repeated preflight failures",
             "detached auxiliary heads are rejected; multitask gradients must update shared ranking parameters",
             "uniform BPR sampling beyond four negatives is rejected",
             "current-score hard-negative mining is rejected",

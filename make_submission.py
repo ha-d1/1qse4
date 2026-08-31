@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from baseline import FM
+from candidate.model import FieldWeightedFM
 from data import (
     FIELDS,
     USER_AUTHOR_FIELDS,
@@ -44,7 +45,22 @@ def score_unlabelled_rows(checkpoint_path, train_rows, target_rows):
         b = np.float32(checkpoint["b"])
         if V.shape[0] != encoder["dimension"] or W.shape != (encoder["dimension"],):
             raise ValueError("Checkpoint dimensions do not match the train-fitted encoder")
-        model = FM(encoder["dimension"], k=V.shape[1], lr=metadata["lr"], seed=0)
+        architecture = metadata.get("architecture", "fm")
+        if architecture == "fm":
+            model = FM(encoder["dimension"], k=V.shape[1], lr=metadata["lr"], seed=0)
+        elif architecture == "field_weighted":
+            model = FieldWeightedFM(
+                encoder["dimension"],
+                field_count=X.shape[1],
+                k=V.shape[1],
+                lr=metadata["lr"],
+                seed=0,
+            )
+            if "field_pair_weights" not in checkpoint.files:
+                raise ValueError("Field-weighted checkpoint is missing field_pair_weights")
+            model.field_pair_weights = checkpoint["field_pair_weights"].copy()
+        else:
+            raise ValueError(f"Unsupported final-inference architecture: {architecture}")
         model.V, model.W, model.b = V.copy(), W.copy(), b
         scores = model.predict(X)
     if len(scores) != len(target_rows) or not np.isfinite(scores).all():

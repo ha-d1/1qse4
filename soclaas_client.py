@@ -168,7 +168,7 @@ class SoCLaaSClient:
                 if not raw_text:
                     raise ValueError("SoCLaaS returned an empty research plan")
                 return PlanningResult(
-                    plan=parse_plan(raw_text),
+                    plan=parse_plan(raw_text, context=context),
                     usage=cumulative_usage,
                     interaction_id=getattr(response, "id", None),
                     raw_text=raw_text,

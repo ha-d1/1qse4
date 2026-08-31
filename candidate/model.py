@@ -11,6 +11,120 @@ from data import FIELDS, USER_AUTHOR_FIELDS, WEEKDAY_FIELDS, encode
 from evaluate import evaluate
 
 
+class FieldWeightedFM(FM):
+    """FM with one learned gate for every pair of categorical feature fields."""
+
+    def __init__(self, dim, field_count, k=16, lr=0.001, l2=1e-6, seed=0):
+        super().__init__(dim, k=k, lr=lr, l2=l2, seed=seed)
+        self.field_count = int(field_count)
+        self.field_pairs = [
+            (left, right)
+            for left in range(self.field_count)
+            for right in range(left + 1, self.field_count)
+        ]
+        self.field_pair_weights = np.ones(len(self.field_pairs), dtype=np.float32)
+        self.mP = np.zeros_like(self.field_pair_weights)
+        self.vP = np.zeros_like(self.field_pair_weights)
+
+    def _pair_features(self, embeddings):
+        return np.stack(
+            [
+                np.sum(embeddings[:, left] * embeddings[:, right], axis=1)
+                for left, right in self.field_pairs
+            ],
+            axis=1,
+        )
+
+    def _embedding_derivative(self, embeddings):
+        derivative = np.zeros_like(embeddings)
+        for pair_index, (left, right) in enumerate(self.field_pairs):
+            weight = self.field_pair_weights[pair_index]
+            derivative[:, left] += weight * embeddings[:, right]
+            derivative[:, right] += weight * embeddings[:, left]
+        return derivative
+
+    def logits(self, X):
+        embeddings = self.V[X]
+        pair_features = self._pair_features(embeddings)
+        interaction = pair_features @ self.field_pair_weights
+        scores = self.b + self.W[X].sum(1) + interaction
+        return scores, embeddings, pair_features
+
+    def _adam_update(self, gradients):
+        self.t += 1
+        b1, b2, eps = 0.9, 0.999, 1e-8
+        parameters = (
+            (self.V, gradients[0], self.mV, self.vV),
+            (self.W, gradients[1], self.mW, self.vW),
+            (self.field_pair_weights, gradients[2], self.mP, self.vP),
+        )
+        for parameter, gradient, momentum, variance in parameters:
+            momentum *= b1
+            momentum += (1.0 - b1) * gradient
+            variance *= b2
+            variance += (1.0 - b2) * gradient * gradient
+            parameter -= self.lr * (momentum / (1.0 - b1**self.t)) / (
+                np.sqrt(variance / (1.0 - b2**self.t)) + eps
+            )
+
+    def step(self, X, y):
+        batch_size = len(y)
+        scores, embeddings, pair_features = self.logits(X)
+        probabilities = 1.0 / (1.0 + np.exp(-np.clip(scores, -30, 30)))
+        score_gradient = ((probabilities - y) / batch_size).astype(np.float32)
+        gradient_v = np.zeros_like(self.V)
+        gradient_w = np.zeros_like(self.W)
+        np.add.at(gradient_w, X, score_gradient[:, None])
+        np.add.at(
+            gradient_v,
+            X,
+            score_gradient[:, None, None] * self._embedding_derivative(embeddings),
+        )
+        gradient_p = np.sum(score_gradient[:, None] * pair_features, axis=0)
+        gradient_v += self.l2 * self.V
+        gradient_w += self.l2 * self.W
+        gradient_p += self.l2 * (self.field_pair_weights - 1.0)
+        self._adam_update((gradient_v, gradient_w, gradient_p))
+        self.b -= self.lr * score_gradient.sum()
+        loss = -np.mean(
+            y * np.log(probabilities + 1e-9)
+            + (1.0 - y) * np.log(1.0 - probabilities + 1e-9)
+        )
+        return float(loss)
+
+    def step_bpr(self, X_pos, X_neg):
+        batch_size = len(X_pos)
+        pos_scores, pos_embeddings, pos_pairs = self.logits(X_pos)
+        neg_scores, neg_embeddings, neg_pairs = self.logits(X_neg)
+        difference = pos_scores - neg_scores
+        sigmoid = 1.0 / (1.0 + np.exp(-np.clip(difference, -30, 30)))
+        score_gradient = ((sigmoid - 1.0) / batch_size).astype(np.float32)
+        gradient_v = np.zeros_like(self.V)
+        gradient_w = np.zeros_like(self.W)
+        np.add.at(gradient_w, X_pos, score_gradient[:, None])
+        np.add.at(gradient_w, X_neg, -score_gradient[:, None])
+        np.add.at(
+            gradient_v,
+            X_pos,
+            score_gradient[:, None, None]
+            * self._embedding_derivative(pos_embeddings),
+        )
+        np.add.at(
+            gradient_v,
+            X_neg,
+            -score_gradient[:, None, None]
+            * self._embedding_derivative(neg_embeddings),
+        )
+        gradient_p = np.sum(
+            score_gradient[:, None] * (pos_pairs - neg_pairs), axis=0
+        )
+        gradient_v += self.l2 * self.V
+        gradient_w += self.l2 * self.W
+        gradient_p += self.l2 * (self.field_pair_weights - 1.0)
+        self._adam_update((gradient_v, gradient_w, gradient_p))
+        return float(-np.mean(np.log(sigmoid + 1e-9)))
+
+
 def make_hard_bpr_pairs(
     X: np.ndarray,
     y: np.ndarray,
@@ -111,6 +225,7 @@ def train_candidate(
     auxiliary_ratio: float = 0.0,
     negative_strategy: str = "random",
     hard_candidate_multiplier: int = 2,
+    architecture: str = "fm",
 ) -> tuple[dict, FM]:
     if set(splits) != {"train", "valid"}:
         raise ValueError("Candidate training accepts train/valid only")
@@ -130,6 +245,8 @@ def train_candidate(
         raise ValueError(f"Unknown negative strategy: {negative_strategy}")
     if hard_candidate_multiplier < 1:
         raise ValueError("hard_candidate_multiplier must be at least 1")
+    if architecture not in {"fm", "field_weighted"}:
+        raise ValueError(f"Unknown architecture: {architecture}")
     if auxiliary_ratio < 0.0 or auxiliary_ratio > 1.0:
         raise ValueError("auxiliary_ratio must be between 0 and 1")
     if auxiliary_task is None and auxiliary_ratio != 0.0:
@@ -156,7 +273,17 @@ def train_candidate(
         if feature_set == "history_blend"
         else None
     )
-    model = FM(dimension, k=k, lr=lr, seed=seed)
+    model = (
+        FM(dimension, k=k, lr=lr, seed=seed)
+        if architecture == "fm"
+        else FieldWeightedFM(
+            dimension,
+            field_count=X_train.shape[1],
+            k=k,
+            lr=lr,
+            seed=seed,
+        )
+    )
     rng = np.random.default_rng(seed)
     best_score = float("-inf")
     best_state = None
@@ -281,5 +408,6 @@ def train_candidate(
         "auxiliary_ratio": auxiliary_ratio,
         "negative_strategy": negative_strategy,
         "hard_candidate_multiplier": hard_candidate_multiplier,
+        "architecture": architecture,
         "history": history,
     }, model

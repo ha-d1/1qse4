@@ -12,12 +12,12 @@
 
 - SoCLaaS planning model: qwen3.6:35b
 - SoCLaaS coding model: qwen3-coder-next
-- Runs / iterations: 33 / 39
-- Proposal attempts / failed attempts: 51 / 47
+- Runs / iterations: 36 / 48
+- Proposal attempts / failed attempts: 57 / 50
 - Accepted autonomous iterations: 0
-- LLM calls: 89
-- Prompt / response / total tokens: 647483 / 214537 / 862020
-- Autonomous wall-clock seconds: 2548.900
+- LLM calls: 107
+- Prompt / response / total tokens: 738746 / 224766 / 963512
+- Autonomous wall-clock seconds: 3309.575
 
 ## Other resources and safety
 

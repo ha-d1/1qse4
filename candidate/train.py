@@ -22,10 +22,17 @@ def save_checkpoint(path: str | Path, model, metadata: dict) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         destination,
-        V=model.V,
-        W=model.W,
-        b=np.asarray(model.b),
-        metadata=np.asarray(json.dumps(metadata, sort_keys=True)),
+        **{
+            "V": model.V,
+            "W": model.W,
+            "b": np.asarray(model.b),
+            "metadata": np.asarray(json.dumps(metadata, sort_keys=True)),
+            **(
+                {"field_pair_weights": model.field_pair_weights}
+                if hasattr(model, "field_pair_weights")
+                else {}
+            ),
+        },
     )
     return destination
 
@@ -41,6 +48,7 @@ def main() -> None:
     parser.add_argument("--k", type=int, default=16)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch-size", type=int, default=8192)
+    parser.add_argument("--architecture", choices=["fm", "field_weighted"], default="fm")
     parser.add_argument("--negatives-per-positive", type=int, default=1)
     parser.add_argument(
         "--negative-strategy", choices=["random", "hard"], default="random"
@@ -79,6 +87,7 @@ def main() -> None:
         auxiliary_ratio=args.auxiliary_ratio,
         negative_strategy=args.negative_strategy,
         hard_candidate_multiplier=args.hard_candidate_multiplier,
+        architecture=args.architecture,
     )
     if args.checkpoint_out:
         checkpoint = save_checkpoint(
@@ -97,6 +106,7 @@ def main() -> None:
                 "auxiliary_ratio": args.auxiliary_ratio,
                 "negative_strategy": args.negative_strategy,
                 "hard_candidate_multiplier": args.hard_candidate_multiplier,
+                "architecture": args.architecture,
                 "validation_metrics": metrics,
             },
         )

@@ -29,7 +29,7 @@ FM takes about 40 seconds in total (single-threaded CPU).
 
 ## Autonomous Research Agent
 
-The agent uses the OpenAI-compatible NUS SoCLaaS API with Qwen as its planning and coding models; LangChain is not required. Development code is deliberately limited to labelled `train` and `valid` data. Test rows are exposed without labels only for the final prediction stage.
+The agent uses the OpenAI-compatible NUS SoCLaaS API with Qwen as its research controller; LangChain is not required. Qwen does not train or replace the recommender. It chooses a bounded experiment, may write a candidate-only patch, and reflects on the measured result. The local Python process trains the recommender and the protected evaluator scores it. Development code is deliberately limited to labelled `train` and `valid` data. Test rows are exposed without labels only for the final prediction stage.
 
 Install and verify the protected baseline:
 
@@ -51,11 +51,26 @@ The full run is bounded by `agent_config.json`: at most 50 iterations, six hours
 ### Agent architecture and reflection
 
 ```text
-Qwen planner -> approved hypothesis -> Qwen coder -> candidate-only patch
-     ^                                                   |
-     |                                                   v
-reflection memory <- structured reflection <- validation/preflight
+prior evidence -> Qwen planner -> schema/policy gate -> implementation
+       ^                                                  |
+       |                                                  v
+reflection memory <- Qwen scientific reflection <- preflight + validation
+                                                          |
+                                      accept and persist, or reject and roll back
 ```
+
+Qwen has two explicit roles:
+
+1. **Planner:** returns a structured hypothesis, scientific change, expected effect,
+   validation command, and risk assessment. The agent rejects malformed, prohibited, or
+   repeated proposals before training.
+2. **Reflector:** classifies the outcome as scientific evidence or an implementation failure,
+   records reusable lessons, and decides whether to continue, refine, or close the direction.
+
+For unrestricted directions, a Qwen coder can produce a patch confined to `candidate/`. For the
+judge demonstration, the planner selected a prevalidated field-weighted-FM scaffold. The agent
+therefore skipped code generation, which saved tokens and prevented known full-file rewrite
+failures, while Qwen still controlled the hypothesis and interpreted every measured result.
 
 After every iteration, including implementation failures, the planning model writes a structured
 reflection containing a causal analysis, reusable lessons, a `continue`/`refine`/`close` decision,
@@ -71,6 +86,54 @@ reflections, checkpoint hashes, and the five accepted checkpoints. Refresh and v
 .venv/bin/python build_evidence_package.py
 .venv/bin/python verify_evidence_package.py
 ```
+
+### Reproduced development results
+
+All numbers below use only `train` and `valid`, with the fixed `long_view`, GAUC, and nDCG@5
+protocol. Hidden-test labels were not evaluated during development.
+
+| Experiment | Seeds | validation primary | Decision |
+|---|---:|---:|---|
+| Official pointwise FM verification | 0, 1, 2 | mean **0.601470** | Reference baseline |
+| Pairwise BPR candidate | 0, 1, 2 | mean **0.603230** | Retained as evidence; user-added starting direction |
+| Accepted five-checkpoint ensemble | 0–4 | **0.604539** | Current incumbent |
+| Field-weighted FM, sustained agent run | 0, 1, 2 | 0.603525 / 0.603024 / 0.603153; mean **0.603234** | Rejected; Qwen closed direction |
+
+The sustained autonomous run is `run_20260831T123431Z`: all three iterations completed training,
+preflight, validation, structured reflection, and artifact logging with zero manual interventions.
+It used 34,722 SoCLaaS tokens across six Qwen calls and 526.4 seconds of wall-clock time. A
+negative result is expected research behavior: none of the three checkpoints replaced the
+incumbent because all scored lower.
+
+For transparency, `research_run_report.md` aggregates the entire historical development archive,
+including earlier failed implementations: 48 iterations, 107 Qwen calls, 963,512 tokens, and four
+logged manual interventions. The final no-direction guard stops locally before another Qwen call
+once reflection has closed every approved branch, preventing those failed directions from being
+repeated merely to consume the remaining budget.
+
+### Reproduce the autonomous evidence run
+
+Keep `SOCLAAS_API_KEY` in macOS Keychain as described in `SOCLAAS_SETUP.md`, then run:
+
+```bash
+.venv/bin/python run_agent_with_keychain.py --max-iterations 3
+.venv/bin/python build_evidence_package.py
+.venv/bin/python verify_evidence_package.py
+```
+
+The run directory contains the exact proposal, implementation mode, command, metrics, errors,
+reflection, token counts, runtime, GPU usage, and acceptance decision for each iteration. The
+evidence builder copies a compact, checksum-verifiable package into `evidence/`.
+
+### Limitations and next research direction
+
+- The accepted improvement is modest and validation-only; the hidden test remains untouched until
+  the final submission evaluation.
+- The field-weighted experiment is a robust negative result, not a new best model.
+- The current implementation is CPU/NumPy-oriented and does not yet exploit long user-history
+  sequences or GPU acceleration.
+- The next high-value direction is a prevalidated listwise or history-aware objective, evaluated
+  with matched seeds before any architecture is accepted.
 
 ## Task Definition (the conventions are fixed; do not change them)
 

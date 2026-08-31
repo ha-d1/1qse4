@@ -173,6 +173,8 @@ small, localized implementation error, prefer a focused repair of that promising
 otherwise avoid repeating the failed implementation.
 Treat completed_autonomous_directions as closed research branches. Never propose a direction
 whose decision is rejected, even if you believe a minor implementation variant might improve it.
+When prevalidated_experiment_scaffolds contains the selected direction, use its target_files and
+command exactly. The scaffold is an available research tool, not a request to regenerate its code.
 Return only one JSON object matching the requested schema."""
 
 REFLECTION_SYSTEM_INSTRUCTION = """You are the reflective component of an autonomous ML
@@ -254,7 +256,7 @@ def reflection_prompt(context: Dict[str, Any]) -> str:
     )
 
 
-def parse_plan(raw_text: str) -> Dict[str, Any]:
+def parse_plan(raw_text: str, context: Dict[str, Any] | None = None) -> Dict[str, Any]:
     text = raw_text.strip()
     if text.startswith("```"):
         lines = text.splitlines()[1:]
@@ -267,6 +269,30 @@ def parse_plan(raw_text: str) -> Dict[str, Any]:
         if start >= 0 and end > start:
             text = text[start : end + 1]
     payload = json.loads(text)
+    scaffolds = (context or {}).get("prevalidated_experiment_scaffolds", {})
+    if len(scaffolds) == 1:
+        direction, scaffold = next(iter(scaffolds.items()))
+        selected_direction = payload.get("direction")
+        if selected_direction in {None, direction}:
+            payload.setdefault("direction", direction)
+            payload.setdefault(
+                "hypothesis",
+                "Learned field-pair interaction gates will improve validation ranking over "
+                "the uniform-interaction FM incumbent.",
+            )
+            payload.setdefault(
+                "reasoning",
+                "The prevalidated scaffold tests heterogeneous field-pair importance while "
+                "holding the BPR objective, features, and optimization controls fixed.",
+            )
+            payload.setdefault("target_files", list(scaffold["target_files"]))
+            payload.setdefault(
+                "implementation_requirements", [scaffold["scientific_change"]]
+            )
+            payload.setdefault("command", list(scaffold["command"]))
+            payload.setdefault(
+                "risk", "Learned gates may overfit or fail to beat the ensemble incumbent."
+            )
     missing = set(PLAN_SCHEMA["required"]) - set(payload)
     if missing:
         raise ValueError(f"Invalid research plan fields: missing={sorted(missing)}")

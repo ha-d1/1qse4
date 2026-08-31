@@ -9,7 +9,8 @@ from pathlib import Path
 
 from convergence import ConvergenceState
 from experiment_runner import ExperimentRunner
-from llm_common import redact_secrets
+from experiment_schema import ExperimentProposal
+from llm_common import ProposalResult, redact_secrets
 from llm_factory import create_llm_client
 from patch_manager import PatchManager
 from proposal_materializer import materialize_patch
@@ -166,6 +167,35 @@ def build_reflection_context(
     }
 
 
+def proposal_from_scaffold(plan: dict, scaffold: dict, iteration: int) -> ProposalResult:
+    """Materialise a planner-selected, locally prevalidated experiment without generated code."""
+    command = list(scaffold["command"])
+    seed_schedule = list(scaffold.get("seed_schedule", [0]))
+    scheduled_seed = seed_schedule[(iteration - 1) % len(seed_schedule)]
+    if "--seed" in command:
+        command[command.index("--seed") + 1] = str(scheduled_seed)
+    proposal = ExperimentProposal(
+        hypothesis=plan["hypothesis"],
+        reasoning=plan["reasoning"],
+        target_files=list(scaffold["target_files"]),
+        expected_effect=(
+            "Test whether learned field-pair interaction gates improve validation GAUC and "
+            "nDCG@5 over the current multi-negative BPR interaction structure."
+        ),
+        risk=plan["risk"],
+        patch="",
+        command=command,
+        implementation_mode="scaffold",
+    )
+    proposal.validate()
+    return ProposalResult(
+        proposal=proposal,
+        usage={"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0},
+        interaction_id=None,
+        raw_text="prevalidated scaffold selected by planner",
+    )
+
+
 def command_with_verified_data_dir(command: list[str], data_dir: Path) -> list[str]:
     """Force generated commands to use the already verified development dataset path."""
     output = list(command)
@@ -197,6 +227,8 @@ def command_with_checkpoint(command: list[str], checkpoint_path: Path) -> list[s
 
 def proposal_requires_shared_parameter_effect(proposal) -> bool:
     """Identify auxiliary/multitask proposals that need a same-code control check."""
+    if getattr(proposal, "implementation_mode", "patch") == "scaffold":
+        return False
     command_mentions_auxiliary = any(
         argument.startswith(("--aux-", "--auxiliary-", "--multitask-"))
         for argument in proposal.command
@@ -287,6 +319,7 @@ def main() -> None:
         },
     )
 
+    terminal_stop_reason = None
     try:
         while convergence.stop_reason(resources.snapshot()["wall_clock_seconds"]) is None:
             iteration = convergence.iterations + 1
@@ -301,6 +334,9 @@ def main() -> None:
                 candidate_sources=candidate_sources(root),
                 reference_sources=reference_api_contracts(),
             )
+            if not context.get("available_directions"):
+                terminal_stop_reason = "no_approved_research_direction"
+                break
             iteration_record = {
                 "iteration": iteration,
                 "attempts": [],
@@ -323,6 +359,16 @@ def main() -> None:
                             f"selected={planning_result.plan['direction']!r}, "
                             f"available={context['available_directions']!r}"
                         )
+                    scaffold = context.get("prevalidated_experiment_scaffolds", {}).get(
+                        planning_result.plan["direction"]
+                    )
+                    if scaffold:
+                        planning_result.plan["target_files"] = list(scaffold["target_files"])
+                        planning_result.plan["command"] = list(scaffold["command"])
+                        planning_result.plan["implementation_requirements"] = [
+                            scaffold["scientific_change"],
+                            scaffold["instruction"],
+                        ]
                     context["approved_research_plan"] = planning_result.plan
                     context["llm_budget"] = {
                         "coding_max_tokens": coding_token_budget(
@@ -355,7 +401,13 @@ def main() -> None:
             recovery = None
             proposal = None
             observed_score = None
-            max_repairs = int(budget.get("max_repair_attempts", 0))
+            approved_plan = context.get("approved_research_plan") or {}
+            scaffold = context.get("prevalidated_experiment_scaffolds", {}).get(
+                approved_plan.get("direction")
+            )
+            max_repairs = (
+                0 if scaffold else int(budget.get("max_repair_attempts", 0))
+            )
             for attempt_index in range(0 if planning_failed else max_repairs + 1):
                 attempt_number = attempt_index + 1
                 attempt_record = {"attempt": attempt_number, "kind": "proposal" if not recovery else "repair"}
@@ -385,11 +437,17 @@ def main() -> None:
                         break
                 try:
                     proposal_result = (
-                        llm.propose(context) if recovery is None else llm.repair(context, recovery)
+                        proposal_from_scaffold(approved_plan, scaffold, iteration)
+                        if recovery is None and scaffold
+                        else (
+                            llm.propose(context)
+                            if recovery is None
+                            else llm.repair(context, recovery)
+                        )
                     )
-                    resources.add_llm_usage(**proposal_result.usage)
+                    if proposal_result.usage.get("total_tokens", 0):
+                        resources.add_llm_usage(**proposal_result.usage)
                     proposal = proposal_result.proposal
-                    approved_plan = context.get("approved_research_plan")
                     if approved_plan:
                         approved_targets = set(approved_plan["target_files"])
                         proposed_targets = set(proposal.target_files)
@@ -410,19 +468,21 @@ def main() -> None:
                         command_with_verified_data_dir(proposal.command, data_dir),
                         candidate_checkpoint,
                     )
-                    experiment_patch = materialize_patch(root, proposal)
+                    is_scaffold = proposal.implementation_mode == "scaffold"
+                    experiment_patch = "" if is_scaffold else materialize_patch(root, proposal)
                     attempt_record.update(
                         {
                             "proposal": asdict(proposal),
                             "llm_usage": proposal_result.usage,
                             "interaction_id": proposal_result.interaction_id,
                             "executed_command": experiment_command,
+                            "implementation_mode": proposal.implementation_mode,
                         }
                     )
                     logger.write_json(f"{artifact_root}/proposal.json", asdict(proposal))
                     logger.write_text(f"{artifact_root}/patch.diff", experiment_patch)
-                    changed_paths = patches.apply(experiment_patch)
-                    patch_applied = True
+                    changed_paths = [] if is_scaffold else patches.apply(experiment_patch)
+                    patch_applied = not is_scaffold
                     if not set(changed_paths).issubset(set(proposal.target_files)):
                         raise ValueError(
                             "Patch changed a path outside proposal target_files: "
@@ -488,7 +548,7 @@ def main() -> None:
                                 "command": experiment_command,
                             },
                         )
-                    else:
+                    elif patch_applied:
                         patches.rollback(experiment_patch)
                         patch_applied = False
                     attempt_record.update(
@@ -588,7 +648,8 @@ def main() -> None:
         logger.write_json(
             "summary.json",
             {
-                "stop_reason": convergence.stop_reason(resources.snapshot()["wall_clock_seconds"]),
+                "stop_reason": terminal_stop_reason
+                or convergence.stop_reason(resources.snapshot()["wall_clock_seconds"]),
                 "best_validation_metrics": best_metrics,
                 "resources": resources.snapshot(),
                 "history": history,
