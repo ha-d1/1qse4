@@ -155,6 +155,15 @@ def build_research_context(
                     "blends. Sequence models using ordered events remain scientifically distinct."
                 ),
             },
+            {
+                "direction": "auxiliary signals as appended input features",
+                "decision": "suspended after repeated implementation failures",
+                "instruction": (
+                    "Do not retry appended auxiliary feature matrices in this run. The prior "
+                    "attempt failed twice at patch/preflight before a valid validation result; "
+                    "move to a different research direction."
+                ),
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",
@@ -191,9 +200,9 @@ def build_research_context(
             "remaining_seconds": max(0.0, remaining_seconds),
         },
         "available_directions": [
-            "multi-objective learning with train-only auxiliary feedback",
             "leakage-safe time features",
             "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
+            "watch-duration-aware objective using train-only play_time_ms",
         ],
         "constraints": [
             "train and validation only",
@@ -214,6 +223,7 @@ def build_research_context(
             "weekday, explicit user-author crosses, and user-author statistic blends are rejected",
             "generated user-history implementations are temporarily suspended for this run",
             "simple train-label history-rate blends are rejected",
+            "appended auxiliary feature matrices are suspended after repeated implementation failures",
             "detached auxiliary heads are rejected; multitask gradients must update shared ranking parameters",
             "uniform BPR sampling beyond four negatives is rejected",
             "current-score hard-negative mining is rejected",

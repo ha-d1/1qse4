@@ -78,7 +78,7 @@ def record_failed_llm_usage(resources: ResourceTracker, error: Exception) -> Non
         resources.add_llm_usage(**usage)
 
 
-def load_prior_experiment_history(runs_dir: Path, limit: int = 8) -> list[dict]:
+def load_prior_experiment_history(runs_dir: Path, limit: int = 6) -> list[dict]:
     """Load compact, redacted outcomes from earlier runs for cross-run memory."""
     records = []
     if not runs_dir.exists():
@@ -104,10 +104,10 @@ def load_prior_experiment_history(runs_dir: Path, limit: int = 8) -> list[dict]:
                 "status": payload.get("status"),
                 "accepted": payload.get("accepted", False),
                 "metrics": payload.get("metrics"),
-                "error": error[-1200:] if isinstance(error, str) else error,
+                "error": error[-600:] if isinstance(error, str) else error,
                 "last_preflight": {
                     "status": preflight.get("status"),
-                    "stderr_tail": str(preflight.get("stderr", ""))[-1200:],
+                    "stderr_tail": str(preflight.get("stderr", ""))[-600:],
                 }
                 if preflight
                 else None,

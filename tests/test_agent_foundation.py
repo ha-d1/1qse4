@@ -710,6 +710,11 @@ class ProposalTests(unittest.TestCase):
         ).lower()
         self.assertIn("more than four", completed)
         self.assertIn("detached click auxiliary head", completed)
+        self.assertIn("auxiliary signals as appended input features", completed)
+        self.assertNotIn(
+            "multi-objective learning with train-only auxiliary feedback",
+            context["available_directions"],
+        )
 
 
 class PatchManagerTests(unittest.TestCase):
