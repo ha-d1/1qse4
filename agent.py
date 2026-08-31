@@ -306,7 +306,8 @@ def main() -> None:
                 if attempt_index > 0:
                     spent = resources.snapshot()["total_tokens"] - iteration_llm_start
                     token_cap = int(budget.get("max_llm_tokens_per_iteration", 0))
-                    if token_cap and spent >= token_cap:
+                    repair_reserve = int(budget.get("repair_token_reserve", 0))
+                    if token_cap and spent + repair_reserve > token_cap:
                         iteration_record["recovery_events"].append(
                             {
                                 "after_attempt": attempt_number - 1,
@@ -314,6 +315,7 @@ def main() -> None:
                                 "reason": "per-iteration LLM token cap reached",
                                 "tokens_spent": spent,
                                 "token_cap": token_cap,
+                                "repair_reserve": repair_reserve,
                             }
                         )
                         iteration_record.update(

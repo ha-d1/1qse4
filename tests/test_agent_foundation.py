@@ -362,6 +362,8 @@ class ConvergenceTests(unittest.TestCase):
     def test_agent_budget_allows_one_bounded_same_iteration_repair(self) -> None:
         config = json.loads((PROJECT_ROOT / "agent_config.json").read_text())
         self.assertEqual(config["budget"]["max_repair_attempts"], 1)
+        self.assertEqual(config["budget"]["repair_token_reserve"], 14000)
+        self.assertEqual(config["budget"]["max_llm_tokens_per_iteration"], 24000)
 
 
 class ProposalTests(unittest.TestCase):
