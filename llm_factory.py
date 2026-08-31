@@ -16,5 +16,6 @@ def create_llm_client(config: Mapping[str, Any]) -> Any:
             temperature=float(config.get("temperature", 0.2)),
             planning_max_tokens=int(config.get("planning_max_tokens", 1200)),
             coding_max_tokens=int(config.get("coding_max_tokens", 7000)),
+            coding_compact_max_tokens=int(config.get("coding_compact_max_tokens", 4500)),
         )
     raise ValueError(f"Unsupported LLM provider: {provider}")

@@ -160,6 +160,20 @@ def proposal_requires_shared_parameter_effect(proposal) -> bool:
     )
 
 
+def coding_token_budget(context: dict, compact_max_tokens: int, full_max_tokens: int) -> int:
+    """Spend fewer output tokens on narrow diffs while retaining capacity for high-value work."""
+    plan = context.get("approved_research_plan") or {}
+    text = " ".join(
+        str(plan.get(key, ""))
+        for key in ("hypothesis", "reasoning", "direction", "implementation_requirements")
+    ).lower()
+    complex_direction = any(
+        term in text
+        for term in ("architecture", "duration", "censored", "sequence", "attention", "interaction")
+    ) or len(plan.get("target_files", [])) >= 2
+    return int(full_max_tokens if complex_direction else compact_max_tokens)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="agent_config.json")
@@ -241,6 +255,7 @@ def main() -> None:
                 "attempts": [],
                 "recovery_events": [],
             }
+            iteration_llm_start = resources.snapshot()["total_tokens"]
             planning_failed = False
             if hasattr(llm, "plan"):
                 planning_context = {
@@ -252,6 +267,13 @@ def main() -> None:
                     planning_result = llm.plan(planning_context)
                     resources.add_llm_usage(**planning_result.usage)
                     context["approved_research_plan"] = planning_result.plan
+                    context["llm_budget"] = {
+                        "coding_max_tokens": coding_token_budget(
+                            context,
+                            int(config["llm"].get("coding_compact_max_tokens", 4500)),
+                            int(config["llm"].get("coding_max_tokens", 7000)),
+                        )
+                    }
                     iteration_record["planning"] = {
                         "plan": planning_result.plan,
                         "llm_usage": planning_result.usage,
@@ -281,6 +303,27 @@ def main() -> None:
                 attempt_number = attempt_index + 1
                 attempt_record = {"attempt": attempt_number, "kind": "proposal" if not recovery else "repair"}
                 patch_applied = False
+                if attempt_index > 0:
+                    spent = resources.snapshot()["total_tokens"] - iteration_llm_start
+                    token_cap = int(budget.get("max_llm_tokens_per_iteration", 0))
+                    if token_cap and spent >= token_cap:
+                        iteration_record["recovery_events"].append(
+                            {
+                                "after_attempt": attempt_number - 1,
+                                "status": "skipped",
+                                "reason": "per-iteration LLM token cap reached",
+                                "tokens_spent": spent,
+                                "token_cap": token_cap,
+                            }
+                        )
+                        iteration_record.update(
+                            {
+                                "status": "failed",
+                                "accepted": False,
+                                "error": "Repair skipped after reaching per-iteration LLM token cap",
+                            }
+                        )
+                        break
                 try:
                     proposal_result = (
                         llm.propose(context) if recovery is None else llm.repair(context, recovery)

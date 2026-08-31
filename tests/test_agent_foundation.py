@@ -42,6 +42,7 @@ from agent import (
     candidate_sources,
     command_with_checkpoint,
     command_with_verified_data_dir,
+    coding_token_budget,
     load_prior_experiment_history,
     proposal_requires_shared_parameter_effect,
     record_failed_llm_usage,
@@ -417,6 +418,8 @@ class ProposalTests(unittest.TestCase):
         self.assertIn("Recheck every imported symbol", user_message)
         self.assertEqual(completions.calls[0]["response_format"], {"type": "json_object"})
         self.assertEqual(completions.calls[0]["max_tokens"], 7000)
+        adapter.propose({"iteration": 1, "llm_budget": {"coding_max_tokens": 4500}})
+        self.assertEqual(completions.calls[1]["max_tokens"], 4500)
 
     def test_soclaas_wraps_provider_errors(self) -> None:
         class Completions:
@@ -593,6 +596,12 @@ class ProposalTests(unittest.TestCase):
         self.assertTrue(
             proposal_requires_shared_parameter_effect(ExperimentProposal(**payload))
         )
+
+    def test_coding_budget_scales_with_direction_complexity(self) -> None:
+        narrow = {"approved_research_plan": {"direction": "small time feature", "target_files": ["candidate/model.py"]}}
+        complex_plan = {"approved_research_plan": {"direction": "watch-duration censored architecture", "target_files": ["candidate/model.py"]}}
+        self.assertEqual(coding_token_budget(narrow, 4500, 7000), 4500)
+        self.assertEqual(coding_token_budget(complex_plan, 4500, 7000), 7000)
 
     def test_provider_factory_defaults_to_soclaas(self) -> None:
         with patch("soclaas_client.SoCLaaSClient.__init__", return_value=None):

@@ -42,6 +42,7 @@ class SoCLaaSClient:
         planning_model: str = "qwen3.6:35b",
         planning_max_tokens: int = 1200,
         coding_max_tokens: int = 7000,
+        coding_compact_max_tokens: int = 4500,
         client: Any | None = None,
     ) -> None:
         self.model = os.environ.get("SOCLAAS_MODEL", model)
@@ -50,8 +51,11 @@ class SoCLaaSClient:
         self.planning_model = os.environ.get("SOCLAAS_PLANNING_MODEL", planning_model)
         self.planning_max_tokens = int(planning_max_tokens)
         self.coding_max_tokens = int(coding_max_tokens)
+        self.coding_compact_max_tokens = int(coding_compact_max_tokens)
         if self.planning_max_tokens < 256 or self.coding_max_tokens < 1024:
             raise ValueError("SoCLaaS output token limits are too small for structured proposals")
+        if self.coding_compact_max_tokens < 1024 or self.coding_compact_max_tokens > self.coding_max_tokens:
+            raise ValueError("Invalid compact coding token limit")
         if client is None:
             api_key = os.environ.get("SOCLAAS_API_KEY")
             if not api_key:
@@ -92,7 +96,14 @@ class SoCLaaSClient:
                         {"role": "user", "content": proposal_prompt(context, recovery)},
                     ],
                     temperature=self.temperature,
-                    max_tokens=self.coding_max_tokens,
+                    max_tokens=min(
+                        self.coding_max_tokens,
+                        int(
+                            context.get("llm_budget", {}).get(
+                                "coding_max_tokens", self.coding_max_tokens
+                            )
+                        ),
+                    ),
                     response_format={"type": "json_object"},
                 )
                 raw_text = response.choices[0].message.content

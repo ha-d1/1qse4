@@ -22,6 +22,7 @@
     "planning_model": "qwen3.6:35b",
     "planning_max_tokens": 1200,
     "coding_max_tokens": 7000,
+    "coding_compact_max_tokens": 4500,
     "temperature": 0.2,
     "max_attempts": 1
   },
@@ -31,7 +32,8 @@
     "max_iterations": 50,
     "max_wall_clock_seconds": 21600,
     "experiment_timeout_seconds": 1200,
-    "max_repair_attempts": 1
+    "max_repair_attempts": 1,
+    "max_llm_tokens_per_iteration": 24000
   },
   "safety": {
     "development_splits": ["train", "valid"],
