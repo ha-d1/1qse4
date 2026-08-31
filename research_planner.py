@@ -164,6 +164,15 @@ def build_research_context(
                     "move to a different research direction."
                 ),
             },
+            {
+                "direction": "generated continuous recency from unavailable event timestamps",
+                "decision": "suspended after incompatible plan",
+                "instruction": (
+                    "Do not retry DataFrame-based time_diff or time-since-last-interaction. "
+                    "Development rows are raw seven-field tuples containing date but no event "
+                    "timestamp; the project has no pandas dependency."
+                ),
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",
@@ -200,7 +209,6 @@ def build_research_context(
             "remaining_seconds": max(0.0, remaining_seconds),
         },
         "available_directions": [
-            "leakage-safe time features",
             "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
             "watch-duration-aware objective using train-only play_time_ms",
         ],
@@ -224,6 +232,7 @@ def build_research_context(
             "generated user-history implementations are temporarily suspended for this run",
             "simple train-label history-rate blends are rejected",
             "appended auxiliary feature matrices are suspended after repeated implementation failures",
+            "DataFrame-based recency from unavailable event timestamps is suspended",
             "detached auxiliary heads are rejected; multitask gradients must update shared ranking parameters",
             "uniform BPR sampling beyond four negatives is rejected",
             "current-score hard-negative mining is rejected",

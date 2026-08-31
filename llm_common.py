@@ -258,6 +258,20 @@ def parse_proposal(raw_text: str) -> ExperimentProposal:
             lines = lines[:-1]
         text = "\n".join(lines)
     payload = json.loads(text)
+    # Some coding models redundantly populate both supported change formats despite the
+    # contract. Prefer deterministic full-file materialisation when those updates are
+    # structurally usable; otherwise retain the concise patch. This avoids a second LLM call
+    # for a mechanical formatting defect while keeping ExperimentProposal.validate strict.
+    if str(payload.get("patch", "")).strip() and payload.get("file_updates"):
+        updates = payload["file_updates"]
+        declared = set(payload.get("target_files", []))
+        update_paths = {
+            update.get("path") for update in updates if isinstance(update, dict)
+        }
+        if updates and None not in update_paths and update_paths.issubset(declared):
+            payload["patch"] = ""
+        else:
+            payload["file_updates"] = []
     proposal = ExperimentProposal(**payload)
     proposal.validate()
     return proposal

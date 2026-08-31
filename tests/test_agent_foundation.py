@@ -591,6 +591,15 @@ class ProposalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly one"):
             ExperimentProposal(**payload).validate()
 
+    def test_parser_recovers_redundant_patch_and_full_file_updates(self) -> None:
+        payload = self.proposal_payload()
+        payload["file_updates"] = [
+            {"path": "candidate/model.py", "content": "VALUE = 2\n"}
+        ]
+        proposal = parse_proposal(json.dumps(payload))
+        self.assertEqual(proposal.patch, "")
+        self.assertEqual(proposal.file_updates[0]["path"], "candidate/model.py")
+
     def test_auxiliary_proposal_requires_shared_parameter_preflight(self) -> None:
         payload = self.proposal_payload()
         payload["hypothesis"] = "Use a click auxiliary objective"
@@ -722,6 +731,7 @@ class ProposalTests(unittest.TestCase):
         self.assertIn("more than four", completed)
         self.assertIn("detached click auxiliary head", completed)
         self.assertIn("auxiliary signals as appended input features", completed)
+        self.assertIn("unavailable event timestamps", completed)
         self.assertNotIn(
             "multi-objective learning with train-only auxiliary feedback",
             context["available_directions"],
