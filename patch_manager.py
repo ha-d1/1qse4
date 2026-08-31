@@ -39,9 +39,15 @@ class PatchManager:
                 raise PatchError(f"Patch escapes project root: {path}")
         return paths
 
-    def _git_apply(self, patch: str, *options: str) -> subprocess.CompletedProcess:
+    def _git_apply(
+        self, patch: str, *options: str, recount: bool = False
+    ) -> subprocess.CompletedProcess:
+        command = ["git", "apply"]
+        if recount:
+            command.append("--recount")
+        command.extend((*options, "-"))
         return subprocess.run(
-            ["git", "apply", *options, "-"],
+            command,
             cwd=self.project_root,
             input=patch,
             text=True,
@@ -52,14 +58,24 @@ class PatchManager:
     def apply(self, patch: str) -> list[str]:
         paths = self.validate(patch)
         checked = self._git_apply(patch, "--check", "--whitespace=error-all")
+        recount = False
+        if checked.returncode != 0:
+            checked = self._git_apply(
+                patch, "--check", "--whitespace=error-all", recount=True
+            )
+            recount = checked.returncode == 0
         if checked.returncode != 0:
             raise PatchError(checked.stderr.strip() or "git apply --check failed")
-        applied = self._git_apply(patch, "--whitespace=error-all")
+        applied = self._git_apply(
+            patch, "--whitespace=error-all", recount=recount
+        )
         if applied.returncode != 0:
             raise PatchError(applied.stderr.strip() or "git apply failed")
         return paths
 
     def rollback(self, patch: str) -> None:
         reversed_patch = self._git_apply(patch, "--reverse")
+        if reversed_patch.returncode != 0:
+            reversed_patch = self._git_apply(patch, "--reverse", recount=True)
         if reversed_patch.returncode != 0:
             raise PatchError(reversed_patch.stderr.strip() or "git apply --reverse failed")

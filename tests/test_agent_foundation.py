@@ -765,6 +765,26 @@ class PatchManagerTests(unittest.TestCase):
             manager.rollback(patch)
             self.assertEqual(target.read_text(), "VALUE = 1\n")
 
+    def test_recounts_incorrect_generated_hunk_lengths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "candidate").mkdir()
+            target = root / "candidate" / "model.py"
+            target.write_text("VALUE = 1\n")
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            generated = (
+                "--- a/candidate/model.py\n"
+                "+++ b/candidate/model.py\n"
+                "@@ -1,99 +1,99 @@\n"
+                "-VALUE = 1\n"
+                "+VALUE = 2\n"
+            )
+            manager = PatchManager(root)
+            manager.apply(generated)
+            self.assertEqual(target.read_text(), "VALUE = 2\n")
+            manager.rollback(generated)
+            self.assertEqual(target.read_text(), "VALUE = 1\n")
+
 
 class RunnerAndLoggerTests(unittest.TestCase):
     def test_research_report_aggregates_tokens_and_manual_interventions(self) -> None:

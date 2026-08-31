@@ -173,6 +173,21 @@ def build_research_context(
                     "timestamp; the project has no pandas dependency."
                 ),
             },
+            {
+                "direction": "shared-parameter watch-duration MSE auxiliary objective",
+                "decision": "rejected on validation",
+                "evidence": {
+                    "seed_1_primary": 0.6038864850997925,
+                    "seed_1_control_primary": 0.603919267654419,
+                    "best_ensemble_with_watch_primary": 0.6044906973838806,
+                    "incumbent_ensemble_primary": 0.6045457124710083,
+                },
+                "instruction": (
+                    "Do not repeat normalized log(play_time_ms) MSE updates on the shared FM "
+                    "parameters; the semantic preflight passed but full validation and ensemble "
+                    "diversity did not improve."
+                ),
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",
@@ -210,7 +225,6 @@ def build_research_context(
         },
         "available_directions": [
             "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
-            "watch-duration-aware objective using train-only play_time_ms",
         ],
         "constraints": [
             "train and validation only",
@@ -233,6 +247,7 @@ def build_research_context(
             "simple train-label history-rate blends are rejected",
             "appended auxiliary feature matrices are suspended after repeated implementation failures",
             "DataFrame-based recency from unavailable event timestamps is suspended",
+            "shared-parameter watch-duration MSE is rejected on validation",
             "detached auxiliary heads are rejected; multitask gradients must update shared ranking parameters",
             "uniform BPR sampling beyond four negatives is rejected",
             "current-score hard-negative mining is rejected",
