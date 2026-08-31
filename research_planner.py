@@ -196,6 +196,19 @@ def build_research_context(
                     "head, whether detached or shared. Move to an explicitly available direction."
                 ),
             },
+            {
+                "direction": "rank ensemble expansion beyond five BPR seeds",
+                "decision": "rejected on validation",
+                "evidence": {
+                    "five_seed_primary": 0.6045457124710083,
+                    "eight_seed_primary": 0.6043494343757629,
+                    "additional_seeds": [5, 6, 7],
+                },
+                "instruction": (
+                    "Do not train or add more plain four-negative BPR seeds. The complete "
+                    "eight-seed ensemble underperformed the five-seed incumbent."
+                ),
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",
@@ -257,6 +270,7 @@ def build_research_context(
             "DataFrame-based recency from unavailable event timestamps is suspended",
             "shared-parameter watch-duration MSE is rejected on validation",
             "all click-based auxiliary objectives are closed",
+            "plain BPR ensemble expansion beyond five seeds is rejected",
             "detached auxiliary heads are rejected; multitask gradients must update shared ranking parameters",
             "uniform BPR sampling beyond four negatives is rejected",
             "current-score hard-negative mining is rejected",

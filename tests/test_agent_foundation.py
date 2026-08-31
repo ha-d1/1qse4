@@ -733,6 +733,7 @@ class ProposalTests(unittest.TestCase):
         self.assertIn("auxiliary signals as appended input features", completed)
         self.assertIn("unavailable event timestamps", completed)
         self.assertIn("click-based auxiliary objectives", completed)
+        self.assertIn("ensemble expansion beyond five", completed)
         self.assertNotIn(
             "multi-objective learning with train-only auxiliary feedback",
             context["available_directions"],
