@@ -21,8 +21,12 @@ class ExperimentProposal:
             raise ValueError("Proposal requires a hypothesis and reasoning")
         if not self.target_files:
             raise ValueError("Proposal must name at least one target file")
-        if not self.patch.strip() and not self.file_updates:
-            raise ValueError("Proposal must include file_updates or a unified diff patch")
+        has_patch = bool(self.patch.strip())
+        has_file_updates = bool(self.file_updates)
+        if has_patch == has_file_updates:
+            raise ValueError(
+                "Proposal must include exactly one of a unified diff patch or file_updates"
+            )
         if not self.command:
             raise ValueError("Proposal must provide an argv-style command")
         if len(self.command) < 2 or self.command[1] != "candidate/train.py":

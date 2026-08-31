@@ -145,6 +145,21 @@ def command_with_checkpoint(command: list[str], checkpoint_path: Path) -> list[s
     return output
 
 
+def proposal_requires_shared_parameter_effect(proposal) -> bool:
+    """Identify auxiliary/multitask proposals that need a same-code control check."""
+    command_mentions_auxiliary = any(
+        argument.startswith(("--aux-", "--auxiliary-", "--multitask-"))
+        for argument in proposal.command
+    )
+    description = " ".join(
+        [proposal.hypothesis, proposal.reasoning, proposal.expected_effect]
+    ).lower()
+    return command_mentions_auxiliary or any(
+        term in description
+        for term in ("auxiliary", "multi-task", "multitask", "multi-objective")
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="agent_config.json")
@@ -307,14 +322,15 @@ def main() -> None:
                             "Patch changed a path outside proposal target_files: "
                             f"declared={proposal.target_files}, actual={changed_paths}"
                         )
-                    preflight = preflight_runner.run(
-                        [
-                            "python",
-                            "candidate_preflight.py",
-                            "--command-json",
-                            json.dumps(experiment_command),
-                        ]
-                    )
+                    preflight_command = [
+                        "python",
+                        "candidate_preflight.py",
+                        "--command-json",
+                        json.dumps(experiment_command),
+                    ]
+                    if proposal_requires_shared_parameter_effect(proposal):
+                        preflight_command.append("--require-shared-parameter-effect")
+                    preflight = preflight_runner.run(preflight_command)
                     preflight_record = asdict(preflight)
                     preflight_record["stdout"] = redact_secrets(preflight.stdout)
                     preflight_record["stderr"] = redact_secrets(preflight.stderr)

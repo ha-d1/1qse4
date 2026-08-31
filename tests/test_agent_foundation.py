@@ -16,7 +16,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from convergence import ConvergenceState
-from candidate_preflight import smoke_test, synthetic_splits, synthetic_training_auxiliary
+from candidate_preflight import (
+    assert_shared_parameter_effect,
+    auxiliary_control_command,
+    smoke_test,
+    synthetic_splits,
+    synthetic_training_auxiliary,
+)
 from candidate.model import (
     blend_within_user,
     make_hard_bpr_pairs,
@@ -37,6 +43,7 @@ from agent import (
     command_with_checkpoint,
     command_with_verified_data_dir,
     load_prior_experiment_history,
+    proposal_requires_shared_parameter_effect,
     record_failed_llm_usage,
     reference_api_contracts,
 )
@@ -342,6 +349,8 @@ class ProposalTests(unittest.TestCase):
     def test_coder_contract_routes_candidate_data_and_forbids_valid_label_features(self) -> None:
         self.assertIn("from candidate.data import", SYSTEM_INSTRUCTION)
         self.assertIn("Validation labels are evaluation-only", SYSTEM_INSTRUCTION)
+        self.assertIn("Prefer a concise unified diff", SYSTEM_INSTRUCTION)
+        self.assertIn("checkpointed inference parameters V, W, or b", SYSTEM_INSTRUCTION)
 
     def test_rejects_changes_outside_candidate(self) -> None:
         proposal = ExperimentProposal(
@@ -550,6 +559,22 @@ class ProposalTests(unittest.TestCase):
         payload["command"] += ["--split", "test"]
         with self.assertRaisesRegex(ValueError, "hidden test"):
             ExperimentProposal(**payload).validate()
+
+    def test_rejects_both_patch_and_full_file_updates(self) -> None:
+        payload = self.proposal_payload()
+        payload["file_updates"] = [
+            {"path": "candidate/model.py", "content": "VALUE = 2\n"}
+        ]
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            ExperimentProposal(**payload).validate()
+
+    def test_auxiliary_proposal_requires_shared_parameter_preflight(self) -> None:
+        payload = self.proposal_payload()
+        payload["hypothesis"] = "Use a click auxiliary objective"
+        payload["command"] += ["--auxiliary-task", "is_click"]
+        self.assertTrue(
+            proposal_requires_shared_parameter_effect(ExperimentProposal(**payload))
+        )
 
     def test_provider_factory_defaults_to_soclaas(self) -> None:
         with patch("soclaas_client.SoCLaaSClient.__init__", return_value=None):
@@ -772,6 +797,61 @@ class RunnerAndLoggerTests(unittest.TestCase):
     def test_candidate_preflight_runs_current_control(self) -> None:
         with patch("builtins.print"):
             smoke_test(["python", "candidate/train.py", "--objective", "bpr"])
+
+    def test_auxiliary_control_removes_only_auxiliary_options(self) -> None:
+        command = [
+            "python",
+            "candidate/train.py",
+            "--objective",
+            "bpr",
+            "--auxiliary-task",
+            "is_click",
+            "--aux-ratio",
+            "0.25",
+            "--checkpoint-out",
+            "proposed.npz",
+        ]
+        control = auxiliary_control_command(command, "control.npz")
+        self.assertNotIn("--auxiliary-task", control)
+        self.assertNotIn("--aux-ratio", control)
+        self.assertEqual(control[-1], "control.npz")
+        self.assertEqual(control[control.index("--objective") + 1], "bpr")
+
+    def test_semantic_preflight_rejects_unchanged_inference_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proposed = Path(tmp) / "proposed.npz"
+            control = Path(tmp) / "control.npz"
+            arrays = {"V": np.ones((2, 2)), "W": np.ones(2), "b": np.asarray(0.0)}
+            np.savez(proposed, **arrays)
+            np.savez(control, **arrays)
+            with self.assertRaisesRegex(ValueError, "cannot affect final ranking"):
+                assert_shared_parameter_effect(proposed, control)
+
+    def test_semantic_preflight_accepts_changed_inference_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proposed = Path(tmp) / "proposed.npz"
+            control = Path(tmp) / "control.npz"
+            np.savez(proposed, V=np.ones((2, 2)), W=np.ones(2), b=np.asarray(0.0))
+            np.savez(control, V=np.zeros((2, 2)), W=np.ones(2), b=np.asarray(0.0))
+            assert_shared_parameter_effect(proposed, control)
+
+    def test_semantic_preflight_runs_valid_auxiliary_training(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch("builtins.print"):
+            smoke_test(
+                [
+                    "python",
+                    "candidate/train.py",
+                    "--objective",
+                    "bpr",
+                    "--auxiliary-task",
+                    "is_click",
+                    "--auxiliary-ratio",
+                    "0.25",
+                    "--checkpoint-out",
+                    str(Path(tmp) / "proposed.npz"),
+                ],
+                require_shared_parameter_effect=True,
+            )
 
     def test_runner_does_not_expose_llm_credentials(self) -> None:
         runner = ExperimentRunner(PROJECT_ROOT, timeout_seconds=5)

@@ -25,7 +25,6 @@ PROPOSAL_SCHEMA = {
         "patch": {"type": "string"},
         "file_updates": {
             "type": "array",
-            "minItems": 1,
             "items": {
                 "type": "object",
                 "properties": {
@@ -49,7 +48,6 @@ PROPOSAL_SCHEMA = {
         "expected_effect",
         "risk",
         "patch",
-        "file_updates",
         "command",
     ],
     "additionalProperties": False,
@@ -95,8 +93,10 @@ Optimise validation primary = mean(GAUC, nDCG@5), using long_view labels.
 Use train and validation only. Never request, infer, or evaluate test labels.
 Propose exactly one controlled, falsifiable change per iteration.
 Only files under candidate/ may be changed. Do not modify official evaluation code.
-Return the complete new content of every target in file_updates. Set patch to an empty string;
-the harness generates a correct unified diff deterministically.
+Prefer a concise unified diff in patch and omit file_updates. Use exact
+--- a/candidate/... and +++ b/candidate/... headers with enough unchanged context for git apply.
+Use full-file file_updates only as a fallback when a safe concise diff is impractical; if used,
+set patch to an empty string. Never populate both patch and file_updates.
 Use prior evidence, avoid repeated failed ideas, and consider runtime cost.
 The implementation must genuinely optimise the objective named in the hypothesis. Do not
 describe a listwise loss while secretly using BPR updates, and do not pass score gradients
@@ -114,9 +114,12 @@ then frozen for validation. Validation impression features may be transformed wi
 For multi-objective learning, use development_data.load_training_auxiliary. It returns train-only
 arrays aligned exactly with splits['train']; long_view remains the primary target and the only
 validation target. Never attempt to load auxiliary validation or test targets.
+Expose auxiliary behaviour through removable --aux-*, --auxiliary-*, or --multitask-* command
+options. Auxiliary gradients must change checkpointed inference parameters V, W, or b; updating
+only a detached auxiliary scalar or head that is absent from final ranking will fail preflight.
 Before returning, perform a symbol-completeness check over the proposed files: every imported
 name and every method called on the FM instance must either already exist in the supplied
-sources or be implemented in file_updates. In particular, adding an objective dispatcher is
+sources or be implemented in the proposed patch or file_updates. In particular, adding an objective dispatcher is
 incomplete unless its loss/update method is also present and callable with the supplied arguments.
 Raw user_id and video_id values are opaque strings. Never cast them with int() or store them
 in integer NumPy arrays; group by string or create an explicit dictionary mapping.
