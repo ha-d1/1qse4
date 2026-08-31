@@ -58,7 +58,13 @@ def collect_report(runs_dir: Path, config: dict) -> dict:
     )
 
     benchmark = config["benchmark"]
-    checkpoint = runs_dir / "accepted_multineg_seed1" / "best.npz"
+    checkpoints = [
+        runs_dir / "ensemble_multineg_seed0" / "best.npz",
+        runs_dir / "accepted_multineg_seed1" / "best.npz",
+        runs_dir / "ensemble_multineg_seed2" / "best.npz",
+        runs_dir / "ensemble_multineg_seed3" / "best.npz",
+        runs_dir / "ensemble_multineg_seed4" / "best.npz",
+    ]
     return {
         "benchmark": {
             "dataset": benchmark["name"],
@@ -68,12 +74,13 @@ def collect_report(runs_dir: Path, config: dict) -> dict:
             "official_validation_primary": benchmark["official_valid_primary"],
         },
         "selected_candidate": {
-            "model": "Factorization Machine with four-negative BPR",
+            "model": "Five-seed within-user rank ensemble of four-negative BPR FMs",
             "learning_rate": 0.00025,
-            "validation_primary_seed_1": benchmark["incumbent_valid_primary"],
+            "validation_primary": benchmark["incumbent_valid_primary"],
+            "best_single_seed_validation_primary": benchmark["incumbent_single_seed_primary"],
             "three_seed_validation_mean": benchmark["incumbent_three_seed_mean"],
-            "checkpoint": str(checkpoint),
-            "checkpoint_present": checkpoint.is_file(),
+            "checkpoints": [str(path) for path in checkpoints],
+            "checkpoints_present": all(path.is_file() for path in checkpoints),
         },
         "autonomous_agent": {
             "provider": config["llm"]["provider"],
@@ -116,9 +123,10 @@ def render_markdown(report: dict) -> str:
 ## Selected recommender
 
 - Model: {candidate['model']}
-- Validation primary (seed 1): {candidate['validation_primary_seed_1']:.9f}
+- Validation primary: {candidate['validation_primary']:.9f}
+- Best single-seed validation primary: {candidate['best_single_seed_validation_primary']:.9f}
 - Matched three-seed validation mean: {candidate['three_seed_validation_mean']:.9f}
-- Checkpoint present: {candidate['checkpoint_present']}
+- All five checkpoints present: {candidate['checkpoints_present']}
 
 ## Autonomous agent usage
 

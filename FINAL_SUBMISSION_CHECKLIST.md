@@ -1,14 +1,15 @@
 # TechJam Track 2 Final Submission Checklist
 
-The accepted recommender is the Factorization Machine trained with four independently
-sampled BPR negatives per positive, learning rate `0.00025`, and seed 1. Its validation
-primary score is `0.603919268`; the matched three-seed mean is `0.603827814`.
+The accepted recommender is a within-user rank ensemble of five Factorization Machines,
+each trained with four independently sampled BPR negatives per positive and learning rate
+`0.00025` (seeds 0–4). Its validation primary score is `0.604539156`; the best individual
+seed scored `0.604003906`.
 
 ## Before the one final hidden-test prediction
 
 - Run the complete unit suite and `verify_baseline.py`.
 - Confirm `git diff -- evaluate.py` is empty.
-- Confirm `runs/accepted_multineg_seed1/best.npz` exists.
+- Confirm the five seed checkpoints named in `research_run_report.md` exist.
 - Generate a validation prediction file with `make_submission.py` (the safe default).
 - Check it with `submit.py --check --split valid valid_submission.csv`.
 - Regenerate `research_run_report.md` and review token, runtime, iteration, GPU, and

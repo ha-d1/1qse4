@@ -34,8 +34,13 @@ def build_research_context(
                 "seed_2": 0.6036715507507324,
                 "mean": 0.6038278142611185,
             },
+            "accepted_submission_ensemble": {
+                "method": "equal average of normalized within-user ranks from BPR FM seeds 0 through 4",
+                "validation_primary": 0.604539155960083,
+                "best_single_seed_primary": 0.60400390625,
+            },
             "instruction": (
-                "This is the current accepted incumbent. Do not rediscover plain BPR or "
+                "The five-seed rank ensemble is the current accepted incumbent. Do not rediscover plain BPR or "
                 "multi-negative BPR. Propose a materially different representation, auxiliary "
                 "task, history mechanism, or architecture that builds beyond it."
             ),

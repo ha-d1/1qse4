@@ -47,7 +47,7 @@ from experiment_schema import ExperimentProposal
 from llm_common import parse_plan, parse_proposal, redact_secrets
 from llm_common import SYSTEM_INSTRUCTION
 from llm_factory import create_llm_client
-from make_submission import score_unlabelled_rows
+from make_submission import score_unlabelled_rows, within_user_rank_average
 from generate_research_report import collect_report
 from patch_manager import PatchError, PatchManager
 from proposal_materializer import materialize_patch
@@ -116,6 +116,20 @@ class DevelopmentDataTests(unittest.TestCase):
         self.assertEqual(len(scores), 1)
         self.assertTrue(np.isfinite(scores).all())
         self.assertEqual(metadata["feature_set"], "base")
+
+    def test_within_user_rank_ensemble_is_group_local(self) -> None:
+        combined = within_user_rank_average(
+            [
+                np.asarray([1.0, 3.0, 100.0, 0.0]),
+                np.asarray([4.0, 2.0, -50.0, 50.0]),
+            ],
+            ["u1", "u1", "u2", "u2"],
+        )
+        np.testing.assert_allclose(combined, [0.5, 0.5, 0.5, 0.5])
+
+    def test_within_user_rank_ensemble_rejects_misalignment(self) -> None:
+        with self.assertRaisesRegex(ValueError, "align"):
+            within_user_rank_average([np.asarray([1.0])], ["u1", "u2"])
 
     def test_transform_unlabelled_rows_does_not_require_label_column(self) -> None:
         train = [(20220408, "u1", "v1", "a1", "t", 10.0, 1)]
@@ -689,6 +703,7 @@ class RunnerAndLoggerTests(unittest.TestCase):
                     "primary": "mean(GAUC, nDCG@5)",
                     "official_valid_primary": 0.6016,
                     "incumbent_valid_primary": 0.6039,
+                    "incumbent_single_seed_primary": 0.6039,
                     "incumbent_three_seed_mean": 0.6038,
                 },
                 "llm": {

@@ -6,8 +6,10 @@
     "primary": "mean(GAUC, nDCG@5)",
     "official_valid_primary": 0.6016,
     "incumbent_valid_primary_seed_0": 0.6038926243782043,
-    "incumbent_valid_primary": 0.603919267654419,
-    "incumbent_three_seed_mean": 0.6038278142611185
+    "incumbent_valid_primary": 0.604539155960083,
+    "incumbent_single_seed_primary": 0.60400390625,
+    "incumbent_three_seed_mean": 0.6038278142611185,
+    "incumbent_model": "five-seed within-user rank ensemble of four-negative BPR FM"
   },
   "paths": {
     "data_dir": "./KuaiRand-Pure/data",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import csv
 import json
 from pathlib import Path
@@ -51,6 +52,29 @@ def score_unlabelled_rows(checkpoint_path, train_rows, target_rows):
     return scores, metadata
 
 
+def within_user_rank_average(score_arrays, users):
+    """Average normalized within-user ranks from independently trained models."""
+    if not score_arrays:
+        raise ValueError("At least one score array is required")
+    expected = len(users)
+    if any(len(scores) != expected for scores in score_arrays):
+        raise ValueError("Every score array must align with the target rows")
+    groups = collections.defaultdict(list)
+    for index, user in enumerate(users):
+        groups[user].append(index)
+    combined = np.zeros(expected, dtype=np.float32)
+    for scores in score_arrays:
+        ranked = np.empty(expected, dtype=np.float32)
+        for indices in groups.values():
+            group = np.asarray(indices, dtype=np.int64)
+            order = np.argsort(
+                np.argsort(np.asarray(scores)[group], kind="stable"), kind="stable"
+            )
+            ranked[group] = order / max(1, len(group) - 1)
+        combined += ranked / len(score_arrays)
+    return combined
+
+
 def write_submission(path, rows, scores):
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -64,7 +88,12 @@ def write_submission(path, rows, scores):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--checkpoint",
+        action="append",
+        required=True,
+        help="Repeat for rank-averaged checkpoint ensembling.",
+    )
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument(
@@ -76,7 +105,21 @@ def main() -> None:
     args = parser.parse_args()
     train_rows = load_selected(args.data_dir, ["train"])["train"]
     target_rows = load_unlabelled(args.data_dir, args.split)
-    scores, metadata = score_unlabelled_rows(args.checkpoint, train_rows, target_rows)
+    scored = [
+        score_unlabelled_rows(checkpoint, train_rows, target_rows)
+        for checkpoint in args.checkpoint
+    ]
+    score_arrays = [item[0] for item in scored]
+    metadata = scored[0][1]
+    if any(item[1]["feature_set"] != metadata["feature_set"] for item in scored[1:]):
+        raise ValueError("All ensemble checkpoints must use the same feature set")
+    scores = (
+        score_arrays[0]
+        if len(score_arrays) == 1
+        else within_user_rank_average(
+            score_arrays, [row[1] for row in target_rows]
+        )
+    )
     output = write_submission(args.output, target_rows, scores)
     print(
         json.dumps(
@@ -85,7 +128,8 @@ def main() -> None:
                 "output": str(output),
                 "rows": len(target_rows),
                 "split": args.split,
-                "checkpoint": args.checkpoint,
+                "checkpoints": args.checkpoint,
+                "ensemble": "within_user_rank_average" if len(scored) > 1 else None,
                 "feature_set": metadata["feature_set"],
                 "target_labels_accessed": False,
             },

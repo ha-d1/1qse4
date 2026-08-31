@@ -2,10 +2,11 @@
 
 ## Selected recommender
 
-- Model: Factorization Machine with four-negative BPR
-- Validation primary (seed 1): 0.603919268
+- Model: Five-seed within-user rank ensemble of four-negative BPR FMs
+- Validation primary: 0.604539156
+- Best single-seed validation primary: 0.604003906
 - Matched three-seed validation mean: 0.603827814
-- Checkpoint present: True
+- All five checkpoints present: True
 
 ## Autonomous agent usage
 
@@ -20,9 +21,9 @@
 
 ## Other resources and safety
 
-- Logged manual experiment records: 4
-- Logged manual interventions: 3
-- Manual training runtime seconds: 383.318
+- Logged manual experiment records: 5
+- Logged manual interventions: 4
+- Manual training runtime seconds: 1117.268
 - GPU hours: 0.000
 - Development labels used: train and validation only
 - Hidden-test evaluation performed: no
