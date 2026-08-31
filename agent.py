@@ -22,7 +22,7 @@ def load_config(path: Path) -> dict:
     return json.loads(path.read_text())
 
 
-def candidate_sources(root: Path, limit: int = 80_000) -> dict[str, str]:
+def candidate_sources(root: Path, limit: int = 35_000) -> dict[str, str]:
     sources = {}
     used = 0
     for path in sorted((root / "candidate").glob("*.py")):
@@ -32,6 +32,34 @@ def candidate_sources(root: Path, limit: int = 80_000) -> dict[str, str]:
         sources[str(path.relative_to(root))] = text
         used += len(text)
     return sources
+
+
+def reference_api_contracts() -> dict[str, str]:
+    """Expose exact protected APIs without repeatedly sending full implementations."""
+    return {
+        "baseline.py": (
+            "FM(dim, k=16, lr=0.001, l2=1e-6, seed=0); public state V, W, b, lr, l2; "
+            "methods logits(X)->(scores,E,S), step(X,y)->loss, "
+            "step_bpr(X_pos,X_neg)->loss, predict(X,bs=200000)->scores. "
+            "make_bpr_pairs(X,y,users,seed=0)->(X_positive,X_negative)."
+        ),
+        "data.py": (
+            "FIELDS, WEEKDAY_FIELDS, USER_AUTHOR_FIELDS; "
+            "encode(splits,fields=None)->(encoded,dimension), where encoded[name] is "
+            "(X:int32[n,fields], y:float32[n], users:list[str]); "
+            "fit_feature_encoder(train_rows,fields=None)->encoder; "
+            "transform_rows(rows,encoder,include_labels=True)->(X,y_or_None,users)."
+        ),
+        "development_data.py": (
+            "load_development_splits(data_dir)->{'train': raw_rows,'valid': raw_rows}; "
+            "load_training_auxiliary(data_dir,fields)->dict[str,float32 array] for TRAIN ONLY. "
+            "Available auxiliary fields: is_click,is_like,is_follow,is_comment,is_forward,play_time_ms. "
+            "No validation/test auxiliary targets exist."
+        ),
+        "evaluate.py": (
+            "evaluate(users,labels,scores)->dict with GAUC,nDCG@5,primary. Protected; never modify."
+        ),
+    }
 
 
 def parse_metrics(stdout: str) -> dict:
@@ -184,11 +212,7 @@ def main() -> None:
                 remaining_seconds=budget["max_wall_clock_seconds"] - elapsed,
                 remaining_iterations=budget["max_iterations"] - convergence.iterations,
                 candidate_sources=candidate_sources(root),
-                reference_sources={
-                    "baseline.py": (root / "baseline.py").read_text(),
-                    "data.py": (root / "data.py").read_text(),
-                    "development_data.py": (root / "development_data.py").read_text(),
-                },
+                reference_sources=reference_api_contracts(),
             )
             iteration_record = {
                 "iteration": iteration,

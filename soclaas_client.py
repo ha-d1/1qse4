@@ -27,12 +27,18 @@ class SoCLaaSClient:
         max_attempts: int = 3,
         temperature: float = 0.2,
         planning_model: str = "qwen3.6:35b",
+        planning_max_tokens: int = 1200,
+        coding_max_tokens: int = 7000,
         client: Any | None = None,
     ) -> None:
         self.model = os.environ.get("SOCLAAS_MODEL", model)
         self.max_attempts = max_attempts
         self.temperature = temperature
         self.planning_model = os.environ.get("SOCLAAS_PLANNING_MODEL", planning_model)
+        self.planning_max_tokens = int(planning_max_tokens)
+        self.coding_max_tokens = int(coding_max_tokens)
+        if self.planning_max_tokens < 256 or self.coding_max_tokens < 1024:
+            raise ValueError("SoCLaaS output token limits are too small for structured proposals")
         if client is None:
             api_key = os.environ.get("SOCLAAS_API_KEY")
             if not api_key:
@@ -72,6 +78,7 @@ class SoCLaaSClient:
                         {"role": "user", "content": proposal_prompt(context, recovery)},
                     ],
                     temperature=self.temperature,
+                    max_tokens=self.coding_max_tokens,
                     response_format={"type": "json_object"},
                 )
                 raw_text = response.choices[0].message.content
@@ -106,6 +113,7 @@ class SoCLaaSClient:
                         {"role": "user", "content": planning_prompt(context)},
                     ],
                     temperature=self.temperature,
+                    max_tokens=self.planning_max_tokens,
                     response_format={"type": "json_object"},
                 )
                 raw_text = response.choices[0].message.content

@@ -33,9 +33,11 @@ from data import (
     transform_rows,
 )
 from agent import (
+    candidate_sources,
     command_with_checkpoint,
     command_with_verified_data_dir,
     load_prior_experiment_history,
+    reference_api_contracts,
 )
 from development_data import (
     ensure_development_splits,
@@ -386,6 +388,7 @@ class ProposalTests(unittest.TestCase):
         self.assertIn("bad patch", user_message)
         self.assertIn("Recheck every imported symbol", user_message)
         self.assertEqual(completions.calls[0]["response_format"], {"type": "json_object"})
+        self.assertEqual(completions.calls[0]["max_tokens"], 7000)
 
     def test_soclaas_wraps_provider_errors(self) -> None:
         class Completions:
@@ -426,6 +429,13 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(result.plan["direction"], "listwise objective")
         self.assertEqual(result.usage["total_tokens"], 40)
         self.assertEqual(completions.call["model"], "qwen3.6:35b")
+        self.assertEqual(completions.call["max_tokens"], 1200)
+
+    def test_compact_reference_contracts_replace_full_protected_sources(self) -> None:
+        contracts = reference_api_contracts()
+        self.assertIn("make_bpr_pairs", contracts["baseline.py"])
+        self.assertIn("load_training_auxiliary", contracts["development_data.py"])
+        self.assertLess(sum(map(len, contracts.values())), 2_000)
 
     def test_plan_rejects_protected_target(self) -> None:
         plan = {

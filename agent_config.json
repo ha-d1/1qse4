@@ -20,6 +20,8 @@
     "provider": "soclaas",
     "model": "qwen3-coder-next",
     "planning_model": "qwen3.6:35b",
+    "planning_max_tokens": 1200,
+    "coding_max_tokens": 7000,
     "temperature": 0.2,
     "max_attempts": 3
   },
