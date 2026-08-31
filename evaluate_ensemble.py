@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from data import load_selected
+from development_data import remove_labels
 from evaluate import evaluate
 from make_submission import score_unlabelled_rows, within_user_rank_average
 
@@ -100,10 +101,11 @@ def validation_ensemble_results(checkpoints, data_dir, full_only=False):
     splits = load_selected(data_dir, ["train", "valid"])
     train_rows = splits["train"]
     valid_rows = splits["valid"]
+    unlabelled_valid_rows = remove_labels(valid_rows)
     users = [row[1] for row in valid_rows]
     labels = np.asarray([row[6] for row in valid_rows], dtype=np.float32)
     score_arrays = [
-        score_unlabelled_rows(checkpoint, train_rows, valid_rows)[0]
+        score_unlabelled_rows(checkpoint, train_rows, unlabelled_valid_rows)[0]
         for checkpoint in checkpoints
     ]
     results = []

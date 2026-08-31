@@ -18,6 +18,9 @@ ACCEPTED_CHECKPOINTS = (
     ("seed2.npz", "ensemble_multineg_seed2/best.npz"),
     ("seed3.npz", "ensemble_multineg_seed3/best.npz"),
     ("seed4.npz", "ensemble_multineg_seed4/best.npz"),
+    ("hour_seed0.npz", "hour_feature_seed0/best.npz"),
+    ("hour_seed1.npz", "hour_feature_seed1/best.npz"),
+    ("hour_seed2.npz", "hour_feature_seed2/best.npz"),
 )
 
 
@@ -127,6 +130,7 @@ def build_package(root: Path, output_dir: Path, include_checkpoints: bool = True
                 "sha256": _sha256(source),
                 "objective": "four-negative BPR FM",
                 "learning_rate": 0.00025,
+                "feature_set": "hour" if destination_name.startswith("hour_") else "base",
             }
         )
     _write_json(output_dir / "checkpoint_manifest.json", checkpoint_records)
@@ -165,8 +169,8 @@ remain ignored because they contain large generated patches and transient output
 - `resource_report.json`: aggregate Qwen usage, runtime, iterations, failures, and interventions.
 - `experiment_index.json`: compact outcome and reflection for every autonomous iteration.
 - `sustained_run.json`: the latest run containing at least three iterations in one process.
-- `checkpoint_manifest.json`: SHA-256 checksums and metadata for the five accepted models.
-- `checkpoints/`: the actual five accepted four-negative BPR FM checkpoints.
+- `checkpoint_manifest.json`: SHA-256 checksums and metadata for the eight accepted models.
+- `checkpoints/`: five base and three hour-aware four-negative BPR FM checkpoints.
 
 ## Reproduce the validation submission
 
@@ -179,6 +183,9 @@ From the repository root, after downloading KuaiRand-Pure:
   --checkpoint evidence/checkpoints/seed2.npz \\
   --checkpoint evidence/checkpoints/seed3.npz \\
   --checkpoint evidence/checkpoints/seed4.npz \\
+  --checkpoint evidence/checkpoints/hour_seed0.npz \\
+  --checkpoint evidence/checkpoints/hour_seed1.npz \\
+  --checkpoint evidence/checkpoints/hour_seed2.npz \\
   --data-dir /path/to/KuaiRand-Pure/data \\
   --split valid \\
   --output valid_submission.csv

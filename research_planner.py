@@ -237,6 +237,30 @@ def build_research_context(
                     "underperformed the incumbent and all three reflections closed the direction."
                 ),
             },
+            {
+                "direction": "user-balanced BPR weighting",
+                "decision": "rejected after seed and ensemble validation",
+                "evidence": {
+                    "seed_1_primary": 0.60227370262146,
+                    "six_model_ensemble_primary": 0.6043605804443359,
+                },
+                "instruction": "Do not repeat inverse-positive-count BPR weighting.",
+            },
+            {
+                "direction": "hour-of-day categorical interactions",
+                "decision": "accepted after matched-seed validation",
+                "evidence": {
+                    "seed_0_primary": 0.6045704483985901,
+                    "seed_1_primary": 0.6046919822692871,
+                    "seed_2_primary": 0.6045923829078674,
+                    "three_seed_mean": 0.6046182711919149,
+                    "eight_checkpoint_ensemble_primary": 0.6049131155014038,
+                },
+                "instruction": (
+                    "Retain the hour-aware checkpoints in the incumbent. Do not rerun the same "
+                    "hour bucket; future temporal work must use session order or a new mechanism."
+                ),
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",

@@ -20,7 +20,8 @@ SPLITS = {'train': (20220408, 20220421),
 FIELDS = ['user_id', 'video_id', 'author_id', 'tab', 'dur_bucket']
 WEEKDAY_FIELDS = FIELDS + ['weekday']
 USER_AUTHOR_FIELDS = FIELDS + ['user_author']
-SUPPORTED_FIELDS = frozenset(WEEKDAY_FIELDS + USER_AUTHOR_FIELDS)
+HOUR_FIELDS = FIELDS + ['hour_bucket']
+SUPPORTED_FIELDS = frozenset(WEEKDAY_FIELDS + USER_AUTHOR_FIELDS + HOUR_FIELDS)
 
 def _load_selected(data_dir, split_names, include_labels=True):
     """Read only requested date ranges, optionally without materialising labels."""
@@ -44,7 +45,11 @@ def _load_selected(data_dir, split_names, include_labels=True):
                                vid2author.get(r['video_id'], 'UNK'), r['tab'],
                                float(r['duration_ms']))
                         if include_labels:
-                            row += (1 if r[LABEL] != '0' else 0,)
+                            # Preserve the starter label at index 6; optional context follows it.
+                            row += (1 if r[LABEL] != '0' else 0,
+                                    int(r['hourmin']), int(r['time_ms']))
+                        else:
+                            row += (int(r['hourmin']), int(r['time_ms']))
                         out[name].append(row)
                         break
     return out
@@ -110,7 +115,9 @@ def _validated_fields(fields=None):
     return fields
 
 
-def _raw_features(row, fields, edges):
+def _raw_features(row, fields, edges, include_labels=True):
+    context_offset = 7 if include_labels else 6
+    hourmin = row[context_offset] if len(row) > context_offset else None
     values = {
         'user_id': row[1],
         'video_id': row[2],
@@ -120,6 +127,10 @@ def _raw_features(row, fields, edges):
         'weekday': _weekday(row[0]),
         'user_author': f'{row[1]}\x1f{row[3]}',
     }
+    if 'hour_bucket' in fields:
+        if hourmin is None:
+            raise ValueError("hour_bucket requires rows loaded with hourmin context")
+        values['hour_bucket'] = str(int(hourmin) // 100)
     return [values[field] for field in fields]
 
 
@@ -131,7 +142,7 @@ def fit_feature_encoder(train_rows, fields=None):
     edges = _bucket_edges([row[5] for row in train_rows])
     vocabs = [dict() for _ in fields]
     for row in train_rows:
-        for i, v in enumerate(_raw_features(row, fields, edges)):
+        for i, v in enumerate(_raw_features(row, fields, edges, include_labels=True)):
             if v not in vocabs[i]:
                 vocabs[i][v] = len(vocabs[i])
     unk = [len(v) for v in vocabs]
@@ -155,7 +166,9 @@ def transform_rows(rows, encoder, include_labels=True):
     y = np.empty(len(rows), dtype=np.float32) if include_labels else None
     users = []
     for n, row in enumerate(rows):
-        for i, value in enumerate(_raw_features(row, fields, encoder['edges'])):
+        for i, value in enumerate(
+            _raw_features(row, fields, encoder['edges'], include_labels=include_labels)
+        ):
             X[n, i] = (
                 encoder['vocabs'][i].get(value, encoder['unk'][i])
                 + encoder['offsets'][i]

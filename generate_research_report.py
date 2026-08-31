@@ -64,6 +64,9 @@ def collect_report(runs_dir: Path, config: dict) -> dict:
         runs_dir / "ensemble_multineg_seed2" / "best.npz",
         runs_dir / "ensemble_multineg_seed3" / "best.npz",
         runs_dir / "ensemble_multineg_seed4" / "best.npz",
+        runs_dir / "hour_feature_seed0" / "best.npz",
+        runs_dir / "hour_feature_seed1" / "best.npz",
+        runs_dir / "hour_feature_seed2" / "best.npz",
     ]
     return {
         "benchmark": {
@@ -74,7 +77,9 @@ def collect_report(runs_dir: Path, config: dict) -> dict:
             "official_validation_primary": benchmark["official_valid_primary"],
         },
         "selected_candidate": {
-            "model": "Five-seed within-user rank ensemble of four-negative BPR FMs",
+            "model": config["benchmark"].get(
+                "incumbent_model", "within-user rank ensemble of BPR FMs"
+            ),
             "learning_rate": 0.00025,
             "validation_primary": benchmark["incumbent_valid_primary"],
             "best_single_seed_validation_primary": benchmark["incumbent_single_seed_primary"],
@@ -126,7 +131,7 @@ def render_markdown(report: dict) -> str:
 - Validation primary: {candidate['validation_primary']:.9f}
 - Best single-seed validation primary: {candidate['best_single_seed_validation_primary']:.9f}
 - Matched three-seed validation mean: {candidate['three_seed_validation_mean']:.9f}
-- All five checkpoints present: {candidate['checkpoints_present']}
+- All eight checkpoints present: {candidate['checkpoints_present']}
 
 ## Autonomous agent usage
 

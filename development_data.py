@@ -9,8 +9,8 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 
 from data import AUXILIARY_FIELDS, load_selected, load_train_auxiliary, load_unlabelled
 
-Row = Tuple[int, str, str, str, str, float, int]
-UnlabelledRow = Tuple[int, str, str, str, str, float]
+Row = Tuple[int, str, str, str, str, float, int, int, int]
+UnlabelledRow = Tuple[int, str, str, str, str, float, int, int]
 DEVELOPMENT_SPLITS = frozenset({"train", "valid"})
 
 
@@ -49,7 +49,7 @@ def load_training_auxiliary(data_dir: str, fields=AUXILIARY_FIELDS):
 
 def remove_labels(rows: Iterable[Row]) -> List[UnlabelledRow]:
     """Strip the label field from rows before final prediction."""
-    return [row[:-1] for row in rows]
+    return [row[:6] + row[7:] for row in rows]
 
 
 def load_final_prediction_rows(data_dir: str) -> List[UnlabelledRow]:

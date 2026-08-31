@@ -26,8 +26,8 @@ def synthetic_splits() -> dict:
                 float(1000 + item_index * 100),
                 label,
             )
-            train.append(row)
-            valid.append((20220422,) + row[1:])
+            train.append(row + (1200 + item_index, 1649400000000 + item_index))
+            valid.append((20220422,) + row[1:] + (1300 + item_index, 1650600000000 + item_index))
     edge_cases = {
         "all_positive": [1, 1, 1],
         "all_negative": [0, 0, 0],
@@ -45,8 +45,8 @@ def synthetic_splits() -> dict:
                 float(1200 + item_index * 50),
                 label,
             )
-            train.append(row)
-            valid.append((20220422,) + row[1:])
+            train.append(row + (1200 + item_index, 1649401000000 + item_index))
+            valid.append((20220422,) + row[1:] + (1300 + item_index, 1650601000000 + item_index))
     return {"train": train, "valid": valid}
 
 

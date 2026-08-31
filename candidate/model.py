@@ -7,8 +7,79 @@ import time
 import numpy as np
 
 from baseline import FM, make_bpr_pairs
-from data import FIELDS, USER_AUTHOR_FIELDS, WEEKDAY_FIELDS, encode
+from data import FIELDS, HOUR_FIELDS, USER_AUTHOR_FIELDS, WEEKDAY_FIELDS, encode
 from evaluate import evaluate
+
+
+def bpr_user_balance_weights(
+    positive_rows: np.ndarray, strength: float
+) -> np.ndarray:
+    """Interpolate between impression-weighted and equal-user BPR contributions."""
+    if not 0.0 <= strength <= 1.0:
+        raise ValueError("user balance strength must be between 0 and 1")
+    if not len(positive_rows):
+        return np.empty(0, dtype=np.float32)
+    _, inverse, counts = np.unique(
+        positive_rows[:, 0], return_inverse=True, return_counts=True
+    )
+    equal_user = 1.0 / counts[inverse].astype(np.float32)
+    equal_user /= float(np.mean(equal_user))
+    weights = (1.0 - strength) + strength * equal_user
+    return (weights / float(np.mean(weights))).astype(np.float32)
+
+
+def weighted_bpr_step(
+    model: FM,
+    positive_rows: np.ndarray,
+    negative_rows: np.ndarray,
+    sample_weights: np.ndarray,
+) -> float:
+    """Apply a weighted BPR update to the standard categorical FM parameters."""
+    if len(positive_rows) != len(negative_rows) or len(positive_rows) != len(sample_weights):
+        raise ValueError("weighted BPR inputs must have equal lengths")
+    weights = np.asarray(sample_weights, dtype=np.float32)
+    if not len(weights) or not np.isfinite(weights).all() or np.any(weights <= 0):
+        raise ValueError("weighted BPR requires finite positive sample weights")
+    weights = weights / float(np.mean(weights))
+    positive_scores, positive_embeddings, positive_sums = model.logits(positive_rows)
+    negative_scores, negative_embeddings, negative_sums = model.logits(negative_rows)
+    difference = positive_scores - negative_scores
+    sigmoid = 1.0 / (1.0 + np.exp(-np.clip(difference, -30, 30)))
+    score_gradient = (
+        (sigmoid - 1.0) * weights / len(positive_rows)
+    ).astype(np.float32)
+    gradient_v = np.zeros_like(model.V)
+    gradient_w = np.zeros_like(model.W)
+    np.add.at(gradient_w, positive_rows, score_gradient[:, None])
+    np.add.at(
+        gradient_v,
+        positive_rows,
+        score_gradient[:, None, None]
+        * (positive_sums[:, None, :] - positive_embeddings),
+    )
+    np.add.at(gradient_w, negative_rows, -score_gradient[:, None])
+    np.add.at(
+        gradient_v,
+        negative_rows,
+        -score_gradient[:, None, None]
+        * (negative_sums[:, None, :] - negative_embeddings),
+    )
+    gradient_v += model.l2 * model.V
+    gradient_w += model.l2 * model.W
+    model.t += 1
+    beta1, beta2, epsilon = 0.9, 0.999, 1e-8
+    for parameter, gradient, momentum, variance in (
+        (model.V, gradient_v, model.mV, model.vV),
+        (model.W, gradient_w, model.mW, model.vW),
+    ):
+        momentum *= beta1
+        momentum += (1.0 - beta1) * gradient
+        variance *= beta2
+        variance += (1.0 - beta2) * gradient * gradient
+        parameter -= model.lr * (momentum / (1.0 - beta1**model.t)) / (
+            np.sqrt(variance / (1.0 - beta2**model.t)) + epsilon
+        )
+    return float(-np.sum(weights * np.log(sigmoid + 1e-9)) / np.sum(weights))
 
 
 class FieldWeightedFM(FM):
@@ -226,6 +297,7 @@ def train_candidate(
     negative_strategy: str = "random",
     hard_candidate_multiplier: int = 2,
     architecture: str = "fm",
+    user_balance: float = 0.0,
 ) -> tuple[dict, FM]:
     if set(splits) != {"train", "valid"}:
         raise ValueError("Candidate training accepts train/valid only")
@@ -234,6 +306,7 @@ def train_candidate(
     feature_sets = {
         "base": FIELDS,
         "weekday": WEEKDAY_FIELDS,
+        "hour": HOUR_FIELDS,
         "user_author": USER_AUTHOR_FIELDS,
         "history_blend": FIELDS,
     }
@@ -247,6 +320,10 @@ def train_candidate(
         raise ValueError("hard_candidate_multiplier must be at least 1")
     if architecture not in {"fm", "field_weighted"}:
         raise ValueError(f"Unknown architecture: {architecture}")
+    if not 0.0 <= user_balance <= 1.0:
+        raise ValueError("user_balance must be between 0 and 1")
+    if user_balance and (objective != "bpr" or architecture != "fm"):
+        raise ValueError("user-balanced training currently requires BPR with architecture=fm")
     if auxiliary_ratio < 0.0 or auxiliary_ratio > 1.0:
         raise ValueError("auxiliary_ratio must be between 0 and 1")
     if auxiliary_task is None and auxiliary_ratio != 0.0:
@@ -345,9 +422,20 @@ def train_candidate(
                     )
                     auxiliary_pair_count = desired
             indices = rng.permutation(len(X_positive))
+            pair_weights = bpr_user_balance_weights(X_positive, user_balance)
             for start in range(0, len(indices), batch_size):
                 batch = indices[start : start + batch_size]
-                losses.append(model.step_bpr(X_positive[batch], X_negative[batch]))
+                if user_balance:
+                    losses.append(
+                        weighted_bpr_step(
+                            model,
+                            X_positive[batch],
+                            X_negative[batch],
+                            pair_weights[batch],
+                        )
+                    )
+                else:
+                    losses.append(model.step_bpr(X_positive[batch], X_negative[batch]))
 
         model_scores = model.predict(X_valid)
         current_alpha = 0.0
@@ -409,5 +497,6 @@ def train_candidate(
         "negative_strategy": negative_strategy,
         "hard_candidate_multiplier": hard_candidate_multiplier,
         "architecture": architecture,
+        "user_balance": user_balance,
         "history": history,
     }, model

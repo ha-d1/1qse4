@@ -2,11 +2,11 @@
 
 ## Selected recommender
 
-- Model: Five-seed within-user rank ensemble of four-negative BPR FMs
-- Validation primary: 0.604539156
-- Best single-seed validation primary: 0.604003906
-- Matched three-seed validation mean: 0.603827814
-- All five checkpoints present: True
+- Model: eight-checkpoint rank ensemble of five base and three hour-aware four-negative BPR FMs
+- Validation primary: 0.604913116
+- Best single-seed validation primary: 0.604691982
+- Matched three-seed validation mean: 0.604618271
+- All eight checkpoints present: True
 
 ## Autonomous agent usage
 
@@ -21,9 +21,9 @@
 
 ## Other resources and safety
 
-- Logged manual experiment records: 5
+- Logged manual experiment records: 9
 - Logged manual interventions: 4
-- Manual training runtime seconds: 1117.268
+- Manual training runtime seconds: 1787.279
 - GPU hours: 0.000
 - Development labels used: train and validation only
 - Hidden-test evaluation performed: no

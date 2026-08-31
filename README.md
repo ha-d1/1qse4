@@ -80,7 +80,7 @@ treated as evidence against the scientific hypothesis.
 
 The compact, Git-tracked audit trail is under `evidence/`. It contains aggregate token/runtime
 usage, every compact experiment outcome, the latest sustained three-iteration run, automatic
-reflections, checkpoint hashes, and the five accepted checkpoints. Refresh and verify it with:
+reflections, checkpoint hashes, and the eight accepted checkpoints. Refresh and verify it with:
 
 ```bash
 .venv/bin/python build_evidence_package.py
@@ -96,8 +96,11 @@ protocol. Hidden-test labels were not evaluated during development.
 |---|---:|---:|---|
 | Official pointwise FM verification | 0, 1, 2 | mean **0.601470** | Reference baseline |
 | Pairwise BPR candidate | 0, 1, 2 | mean **0.603230** | Retained as evidence; user-added starting direction |
-| Accepted five-checkpoint ensemble | 0–4 | **0.604539** | Current incumbent |
+| Original five-checkpoint ensemble | 0–4 | **0.604539** | Previous incumbent |
 | Field-weighted FM, sustained agent run | 0, 1, 2 | 0.603525 / 0.603024 / 0.603153; mean **0.603234** | Rejected; Qwen closed direction |
+| User-balanced BPR | 1 | **0.602274** | Rejected after one seed and ensemble check |
+| Hour-aware BPR | 0, 1, 2 | 0.604570 / 0.604692 / 0.604592; mean **0.604618** | Accepted |
+| Five base + three hour-aware rank ensemble | 0–4 + 0–2 | **0.604913** | **Current incumbent** |
 
 The sustained autonomous run is `run_20260831T123431Z`: all three iterations completed training,
 preflight, validation, structured reflection, and artifact logging with zero manual interventions.
@@ -132,8 +135,8 @@ evidence builder copies a compact, checksum-verifiable package into `evidence/`.
 - The field-weighted experiment is a robust negative result, not a new best model.
 - The current implementation is CPU/NumPy-oriented and does not yet exploit long user-history
   sequences or GPU acceleration.
-- The next high-value direction is a prevalidated listwise or history-aware objective, evaluated
-  with matched seeds before any architecture is accepted.
+- The next high-value direction is a prevalidated session/history representation that uses
+  `time_ms`, evaluated with matched seeds before any architecture is accepted.
 
 ## Task Definition (the conventions are fixed; do not change them)
 

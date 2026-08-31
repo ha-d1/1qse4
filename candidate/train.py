@@ -49,6 +49,7 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--batch-size", type=int, default=8192)
     parser.add_argument("--architecture", choices=["fm", "field_weighted"], default="fm")
+    parser.add_argument("--user-balance", type=float, default=0.0)
     parser.add_argument("--negatives-per-positive", type=int, default=1)
     parser.add_argument(
         "--negative-strategy", choices=["random", "hard"], default="random"
@@ -62,7 +63,7 @@ def main() -> None:
     parser.add_argument("--checkpoint-out")
     parser.add_argument(
         "--feature-set",
-        choices=["base", "weekday", "user_author", "history_blend"],
+        choices=["base", "weekday", "hour", "user_author", "history_blend"],
         default="base",
     )
     args = parser.parse_args()
@@ -88,6 +89,7 @@ def main() -> None:
         negative_strategy=args.negative_strategy,
         hard_candidate_multiplier=args.hard_candidate_multiplier,
         architecture=args.architecture,
+        user_balance=args.user_balance,
     )
     if args.checkpoint_out:
         checkpoint = save_checkpoint(
@@ -107,6 +109,7 @@ def main() -> None:
                 "negative_strategy": args.negative_strategy,
                 "hard_candidate_multiplier": args.hard_candidate_multiplier,
                 "architecture": args.architecture,
+                "user_balance": args.user_balance,
                 "validation_metrics": metrics,
             },
         )

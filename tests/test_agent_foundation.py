@@ -25,14 +25,18 @@ from candidate_preflight import (
 )
 from candidate.model import (
     FieldWeightedFM,
+    bpr_user_balance_weights,
     blend_within_user,
     make_hard_bpr_pairs,
     user_author_history_scores,
+    weighted_bpr_step,
 )
+from baseline import FM
 from candidate.train import save_checkpoint
 from build_evidence_package import compact_iteration, latest_sustained_run
 from data import (
     FIELDS,
+    HOUR_FIELDS,
     USER_AUTHOR_FIELDS,
     WEEKDAY_FIELDS,
     encode,
@@ -77,6 +81,27 @@ from verify_evidence_package import sha256, verify_evidence
 
 
 class DevelopmentDataTests(unittest.TestCase):
+    def test_user_balance_weights_equalise_each_users_total_contribution(self) -> None:
+        positives = np.asarray(
+            [[1, 10], [1, 11], [1, 12], [2, 13]], dtype=np.int32
+        )
+        weights = bpr_user_balance_weights(positives, strength=1.0)
+        self.assertAlmostEqual(float(weights[:3].sum()), float(weights[3]))
+        self.assertAlmostEqual(float(np.mean(weights)), 1.0)
+
+    def test_uniform_weighted_bpr_matches_standard_update(self) -> None:
+        positive = np.asarray([[0, 2, 4], [1, 3, 5]], dtype=np.int32)
+        negative = np.asarray([[0, 3, 4], [1, 2, 5]], dtype=np.int32)
+        standard = FM(6, k=3, lr=0.001, seed=7)
+        weighted = FM(6, k=3, lr=0.001, seed=7)
+        standard_loss = standard.step_bpr(positive, negative)
+        weighted_loss = weighted_bpr_step(
+            weighted, positive, negative, np.ones(2, dtype=np.float32)
+        )
+        self.assertAlmostEqual(standard_loss, weighted_loss, places=7)
+        np.testing.assert_allclose(standard.V, weighted.V, rtol=0.0, atol=1e-8)
+        np.testing.assert_allclose(standard.W, weighted.W, rtol=0.0, atol=1e-8)
+
     def test_auxiliary_loader_reads_training_dates_only(self) -> None:
         header = (
             "date,is_click,is_like,is_follow,is_comment,is_forward,play_time_ms,long_view\n"
@@ -222,6 +247,31 @@ class DevelopmentDataTests(unittest.TestCase):
         self.assertEqual(X.shape, (1, 5))
         self.assertIsNone(labels)
         self.assertEqual(users, ["u1"])
+
+    def test_hour_feature_uses_context_without_moving_label(self) -> None:
+        train = [
+            (20220408, "u1", "v1", "a1", "t", 10.0, 1, 930, 1),
+            (20220408, "u1", "v2", "a2", "t", 20.0, 0, 1830, 2),
+        ]
+        encoder = fit_feature_encoder(train, fields=HOUR_FIELDS)
+        X, labels, _ = transform_rows(train, encoder, include_labels=True)
+        self.assertEqual(X.shape, (2, 6))
+        np.testing.assert_array_equal(labels, [1.0, 0.0])
+        target = [(20220429, "u1", "v3", "a1", "t", 15.0, 945, 3)]
+        transformed, target_labels, _ = transform_rows(
+            target, encoder, include_labels=False
+        )
+        self.assertEqual(transformed.shape, (1, 6))
+        self.assertIsNone(target_labels)
+
+    def test_remove_labels_preserves_hour_and_timestamp_context(self) -> None:
+        labelled = [
+            (20220429, "u", "v", "a", "tab", 1000.0, 1, 945, 123456)
+        ]
+        self.assertEqual(
+            remove_labels(labelled),
+            [(20220429, "u", "v", "a", "tab", 1000.0, 945, 123456)],
+        )
 
     def test_checkpoint_persists_weights_and_metadata(self) -> None:
         model = SimpleNamespace(
@@ -380,7 +430,10 @@ class DevelopmentDataTests(unittest.TestCase):
     def test_preflight_fixture_has_only_development_splits(self) -> None:
         splits = synthetic_splits()
         self.assertEqual(set(splits), {"train", "valid"})
-        self.assertTrue(all(len(row) == 7 for rows in splits.values() for row in rows))
+        self.assertTrue(all(len(row) == 9 for rows in splits.values() for row in rows))
+        self.assertTrue(
+            all(row[6] in (0, 1) for rows in splits.values() for row in rows)
+        )
         grouped = {}
         for row in splits["train"]:
             grouped.setdefault(row[1], []).append(row[6])

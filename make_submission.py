@@ -13,6 +13,7 @@ from baseline import FM
 from candidate.model import FieldWeightedFM
 from data import (
     FIELDS,
+    HOUR_FIELDS,
     USER_AUTHOR_FIELDS,
     WEEKDAY_FIELDS,
     fit_feature_encoder,
@@ -25,6 +26,7 @@ HEADER = ["row_id", "user_id", "video_id", "score"]
 FEATURE_SETS = {
     "base": FIELDS,
     "weekday": WEEKDAY_FIELDS,
+    "hour": HOUR_FIELDS,
     "user_author": USER_AUTHOR_FIELDS,
 }
 
@@ -127,8 +129,7 @@ def main() -> None:
     ]
     score_arrays = [item[0] for item in scored]
     metadata = scored[0][1]
-    if any(item[1]["feature_set"] != metadata["feature_set"] for item in scored[1:]):
-        raise ValueError("All ensemble checkpoints must use the same feature set")
+    feature_sets = [item[1]["feature_set"] for item in scored]
     scores = (
         score_arrays[0]
         if len(score_arrays) == 1
@@ -146,7 +147,7 @@ def main() -> None:
                 "split": args.split,
                 "checkpoints": args.checkpoint,
                 "ensemble": "within_user_rank_average" if len(scored) > 1 else None,
-                "feature_set": metadata["feature_set"],
+                "feature_sets": feature_sets,
                 "target_labels_accessed": False,
             },
             indent=2,
