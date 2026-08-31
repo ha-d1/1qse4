@@ -97,8 +97,22 @@ def build_research_context(
                     "incumbent_seed_1_primary": 0.603919267654419,
                 },
                 "instruction": (
-                    "Do not repeat shared-score click-pair mixing. A separate auxiliary head "
-                    "or a different train-only auxiliary objective remains scientifically distinct."
+                    "Do not repeat shared-score click-pair mixing. A different train-only "
+                    "auxiliary objective remains scientifically distinct only if its gradients "
+                    "change checkpointed ranking parameters."
+                ),
+            },
+            {
+                "direction": "detached click auxiliary head",
+                "decision": "rejected by semantic preflight and validation",
+                "evidence": {
+                    "observed_primary": 0.6038926243782043,
+                    "incumbent_primary": 0.604539155960083,
+                    "failure": "auxiliary updates did not change checkpointed V, W, or b",
+                },
+                "instruction": (
+                    "Do not propose a detached auxiliary scalar or head that is absent from "
+                    "final ranking. Any multitask gradient must update shared inference parameters."
                 ),
             },
             {
@@ -113,6 +127,32 @@ def build_research_context(
                 "instruction": (
                     "Do not repeat current-score hard-negative mining; it strongly degraded "
                     "both ranking metrics relative to random multi-negative sampling."
+                ),
+            },
+            {
+                "direction": "more than four uniformly sampled BPR negatives",
+                "decision": "rejected on validation",
+                "evidence": {
+                    "eight_negative_seed_1_primary": 0.6038511991500854,
+                    "four_negative_seed_1_primary": 0.603919267654419,
+                    "eight_negative_learning_rate": 0.000125,
+                },
+                "instruction": (
+                    "Do not increase uniform negatives beyond four or retune that same BPR "
+                    "density; the eight-negative proportional-learning-rate control did not improve."
+                ),
+            },
+            {
+                "direction": "simple train-label history post-processing",
+                "decision": "rejected on validation",
+                "evidence": {
+                    "incumbent_recalculated_primary": 0.6045457124710083,
+                    "best_video_history_primary": 0.6044692993164062,
+                    "best_personalized_history_primary": 0.6044439673423767,
+                },
+                "instruction": (
+                    "Do not repeat smoothed video, user-video, author, or user-author target-rate "
+                    "blends. Sequence models using ordered events remain scientifically distinct."
                 ),
             },
         ],
@@ -173,7 +213,9 @@ def build_research_context(
             "Soft-NDCG and top-k-weighted pairwise losses are suspended after repeated preflight failures",
             "weekday, explicit user-author crosses, and user-author statistic blends are rejected",
             "generated user-history implementations are temporarily suspended for this run",
-            "naive shared-score click-pair mixing is rejected; use a separate auxiliary head if revisiting multitask learning",
+            "simple train-label history-rate blends are rejected",
+            "detached auxiliary heads are rejected; multitask gradients must update shared ranking parameters",
+            "uniform BPR sampling beyond four negatives is rejected",
             "current-score hard-negative mining is rejected",
         ],
     }

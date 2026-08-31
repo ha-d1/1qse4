@@ -54,6 +54,7 @@ from development_data import (
 )
 from experiment_runner import ExperimentRunner
 from experiment_schema import ExperimentProposal
+from evaluate_ensemble import within_user_blend, within_user_zscore_average
 from llm_common import parse_plan, parse_proposal, redact_secrets
 from llm_common import SYSTEM_INSTRUCTION
 from llm_factory import create_llm_client
@@ -140,6 +141,23 @@ class DevelopmentDataTests(unittest.TestCase):
     def test_within_user_rank_ensemble_rejects_misalignment(self) -> None:
         with self.assertRaisesRegex(ValueError, "align"):
             within_user_rank_average([np.asarray([1.0])], ["u1", "u2"])
+
+    def test_within_user_zscore_ensemble_is_group_local(self) -> None:
+        users = ["u1", "u1", "u2", "u2"]
+        first = np.asarray([1.0, 2.0, 100.0, 200.0])
+        second = np.asarray([20.0, 10.0, -2.0, -1.0])
+        combined = within_user_zscore_average([first, second], users)
+        np.testing.assert_allclose(combined, [0.0, 0.0, -1.0, 1.0])
+
+    def test_history_blend_is_group_local(self) -> None:
+        users = ["u1", "u1", "u2", "u2"]
+        combined = within_user_blend(
+            np.asarray([1.0, 2.0, 100.0, 200.0]),
+            np.asarray([2.0, 1.0, -2.0, -1.0]),
+            users,
+            0.25,
+        )
+        np.testing.assert_allclose(combined, [-0.75, 0.75, -1.25, 1.25])
 
     def test_transform_unlabelled_rows_does_not_require_label_column(self) -> None:
         train = [(20220408, "u1", "v1", "a1", "t", 10.0, 1)]
@@ -687,6 +705,11 @@ class ProposalTests(unittest.TestCase):
             )
         )
         self.assertNotIn("top-k", " ".join(context["available_directions"]).lower())
+        completed = " ".join(
+            item["direction"] for item in context["completed_autonomous_directions"]
+        ).lower()
+        self.assertIn("more than four", completed)
+        self.assertIn("detached click auxiliary head", completed)
 
 
 class PatchManagerTests(unittest.TestCase):
