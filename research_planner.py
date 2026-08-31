@@ -35,12 +35,15 @@ def build_research_context(
                 "mean": 0.6038278142611185,
             },
             "accepted_submission_ensemble": {
-                "method": "equal average of normalized within-user ranks from BPR FM seeds 0 through 4",
-                "validation_primary": 0.604539155960083,
-                "best_single_seed_primary": 0.60400390625,
+                "method": (
+                    "equal average of normalized within-user ranks from five base, three "
+                    "hour-aware, and session-aware seed 2 BPR FMs"
+                ),
+                "validation_primary": 0.6051324605941772,
+                "best_single_seed_primary": 0.6046919822692871,
             },
             "instruction": (
-                "The five-seed rank ensemble is the current accepted incumbent. Do not rediscover plain BPR or "
+                "The nine-checkpoint rank ensemble is the current accepted incumbent. Do not rediscover plain BPR or "
                 "multi-negative BPR. Propose a materially different representation, auxiliary "
                 "task, history mechanism, or architecture that builds beyond it."
             ),
@@ -278,6 +281,26 @@ def build_research_context(
                     "position buckets; additional session seeds diluted the incumbent."
                 ),
             },
+            {
+                "direction": "censored watch-ratio auxiliary objective on shared FM ranking parameters",
+                "decision": "suspended after one bounded iteration and failed repair preflights",
+                "evidence": {
+                    "run_id": "run_20260831T141532Z",
+                    "attempts": 2,
+                    "full_validation_executed": False,
+                    "attempt_1_failure": (
+                        "auxiliary path did not change checkpointed V, W, or b relative to control"
+                    ),
+                    "attempt_2_failure": (
+                        "repair did not expose a removable auxiliary CLI option for control comparison"
+                    ),
+                },
+                "instruction": (
+                    "Do not automatically retry this direction. Its scientific hypothesis remains "
+                    "untested, but another API call is not justified until a human-reviewed local "
+                    "scaffold passes the shared-parameter and removable-control preflights."
+                ),
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",
@@ -313,9 +336,10 @@ def build_research_context(
             "remaining_iterations": remaining_iterations,
             "remaining_seconds": max(0.0, remaining_seconds),
         },
-        # Empty after the sustained run. This prevents another API call until a new direction
-        # has passed local preflight and is deliberately promoted into the allowlist.
+        # A new Qwen call is deliberately blocked until a distinct direction or a locally
+        # prevalidated scaffold is promoted into this allowlist.
         "available_directions": [],
+        "direction_contracts": {},
         "prevalidated_experiment_scaffolds": {},
         "completed_prevalidated_experiment_scaffolds": {
             "prevalidated field-pair-weighted FM interaction scaffold": {
@@ -375,6 +399,7 @@ def build_research_context(
             "appended auxiliary feature matrices are suspended after repeated implementation failures",
             "DataFrame-based recency from unavailable event timestamps is suspended",
             "shared-parameter watch-duration MSE is rejected on validation",
+            "watch-duration MSE is closed and censored watch-ratio work is suspended pending a local scaffold",
             "all click-based auxiliary objectives are closed",
             "plain BPR ensemble expansion beyond five seeds is rejected",
             "generated diagonal-bilinear FM rewrites are closed after repeated preflight failures",

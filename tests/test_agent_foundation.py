@@ -753,6 +753,21 @@ class ProposalTests(unittest.TestCase):
         )
         self.assertIn("field-pair", parsed["hypothesis"])
 
+    def test_plan_parser_recovers_single_allowlisted_direction(self) -> None:
+        direction = "a locally prevalidated temporal interaction"
+        plan = {
+            "reasoning": "Use the only deliberately promoted direction.",
+            "target_files": ["candidate/model.py"],
+            "implementation_requirements": ["Preserve FM inference."],
+            "command": ["python", "candidate/train.py"],
+            "risk": "May not improve.",
+        }
+        parsed = parse_plan(
+            json.dumps(plan), context={"available_directions": [direction]}
+        )
+        self.assertEqual(parsed["direction"], direction)
+        self.assertIn(direction, parsed["hypothesis"])
+
     def test_plan_parser_normalizes_candidate_script_command(self) -> None:
         plan = {
             "hypothesis": "h",
@@ -974,6 +989,14 @@ class ProposalTests(unittest.TestCase):
         )
         direction = "prevalidated field-pair-weighted FM interaction scaffold"
         self.assertEqual(context["available_directions"], [])
+        self.assertTrue(
+            any(
+                item["direction"]
+                == "censored watch-ratio auxiliary objective on shared FM ranking parameters"
+                and item["decision"].startswith("suspended")
+                for item in context["completed_autonomous_directions"]
+            )
+        )
         self.assertNotIn(direction, context["available_directions"])
         self.assertEqual(
             context["completed_prevalidated_experiment_scaffolds"][direction]["implementation_mode"],

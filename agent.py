@@ -48,11 +48,14 @@ def reference_api_contracts() -> dict[str, str]:
             "V[X] and W[X]. Never compute X @ V or treat X as a dense one-hot matrix."
         ),
         "data.py": (
-            "FIELDS, WEEKDAY_FIELDS, USER_AUTHOR_FIELDS; "
+            "FIELDS, WEEKDAY_FIELDS, USER_AUTHOR_FIELDS, HOUR_FIELDS, SESSION_FIELDS; "
             "encode(splits,fields=None)->(encoded,dimension), where encoded[name] is "
             "(X:int32[n,fields], y:float32[n], users:list[str]); "
             "fit_feature_encoder(train_rows,fields=None)->encoder; "
-            "transform_rows(rows,encoder,include_labels=True)->(X,y_or_None,users)."
+            "transform_rows(rows,encoder,include_labels=True)->(X,y_or_None,users). "
+            "Labelled raw rows are (date,user_id,video_id,author_id,tab,duration_ms,long_view,"
+            "hourmin,time_ms); label remains index 6. SESSION_FIELDS are label-free hour, "
+            "session-gap, and session-position categorical features derived from time_ms."
         ),
         "development_data.py": (
             "load_development_splits(data_dir)->{'train': raw_rows,'valid': raw_rows}; "

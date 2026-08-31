@@ -269,6 +269,13 @@ def parse_plan(raw_text: str, context: Dict[str, Any] | None = None) -> Dict[str
         if start >= 0 and end > start:
             text = text[start : end + 1]
     payload = json.loads(text)
+    available = (context or {}).get("available_directions", [])
+    if len(available) == 1 and payload.get("direction") in {None, available[0]}:
+        payload.setdefault("direction", available[0])
+        payload.setdefault(
+            "hypothesis",
+            f"Testing {available[0]} will improve the accepted validation ranking score.",
+        )
     scaffolds = (context or {}).get("prevalidated_experiment_scaffolds", {})
     if len(scaffolds) == 1:
         direction, scaffold = next(iter(scaffolds.items()))

@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-08-31T14:06:31.189010+00:00",
+  "generated_at_utc": "2026-08-31T14:19:27.887310+00:00",
   "benchmark": "KuaiRand-Pure within-user ranking",
   "label": "long_view",
   "metrics": [
@@ -9,8 +9,8 @@
   "primary": "mean(GAUC, nDCG@5)",
   "hidden_test_labels_evaluated": false,
   "evaluate_py_changed_from_starter": false,
-  "autonomous_iterations": 48,
-  "reflections_present": 18,
+  "autonomous_iterations": 49,
+  "reflections_present": 19,
   "sustained_run_present": true,
   "checkpoint_count": 9
 }
