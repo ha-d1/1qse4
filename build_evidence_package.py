@@ -23,6 +23,11 @@ ACCEPTED_CHECKPOINTS = (
     ("hour_seed2.npz", "hour_feature_seed2/best.npz"),
     ("session_seed2.npz", "session_feature_seed2/best.npz"),
 )
+RECENT_INTEREST_DIRECTIONS = (
+    "short-window recent-interest exposure features",
+    "long-window recent-interest exposure features",
+    "time-decayed recent-interest exposure features",
+)
 
 
 def _read_json(path: Path) -> dict:
@@ -53,6 +58,7 @@ def compact_iteration(path: Path) -> dict:
     return {
         "run_id": path.parents[2].name,
         "iteration": result.get("iteration"),
+        "direction": result.get("planning", {}).get("plan", {}).get("direction"),
         "status": result.get("status"),
         "accepted": result.get("accepted", False),
         "primary": (result.get("metrics") or {}).get("primary"),
@@ -71,16 +77,98 @@ def compact_iteration(path: Path) -> dict:
     }
 
 
+def recent_interest_campaign(runs_dir: Path) -> dict:
+    """Link the bounded primary run and approved recovery into one auditable campaign."""
+    completed = {}
+    relevant_run_ids = set()
+    failures = []
+    for path in sorted(runs_dir.glob("run_*/iterations/iteration_*/result.json")):
+        result = _read_json(path)
+        direction = result.get("planning", {}).get("plan", {}).get("direction")
+        run_id = path.parents[2].name
+        if direction in RECENT_INTEREST_DIRECTIONS and result.get("status") == "success":
+            attempt = (result.get("attempts") or [{}])[-1]
+            completed[direction] = {
+                "run_id": run_id,
+                "iteration": result.get("iteration"),
+                "direction": direction,
+                "hypothesis": result.get("planning", {}).get("plan", {}).get("hypothesis"),
+                "standalone_metrics": attempt.get("standalone_metrics"),
+                "ensemble_metrics": result.get("metrics"),
+                "accepted": result.get("accepted", False),
+                "reflection_status": result.get("reflection", {}).get("status"),
+                "reflection_decision": result.get("reflection", {})
+                .get("content", {})
+                .get("direction_decision"),
+            }
+            relevant_run_ids.add(run_id)
+    for run_id in sorted(relevant_run_ids):
+        for path in sorted((runs_dir / run_id / "iterations").glob("iteration_*/result.json")):
+            result = _read_json(path)
+            if result.get("status") != "success":
+                failures.append(
+                    {
+                        "run_id": run_id,
+                        "iteration": result.get("iteration"),
+                        "error": result.get("error"),
+                        "reflection_status": result.get("reflection", {}).get("status"),
+                    }
+                )
+    resources = {
+        "prompt_tokens": 0,
+        "response_tokens": 0,
+        "total_tokens": 0,
+        "llm_calls": 0,
+        "wall_clock_seconds": 0.0,
+        "manual_interventions": 0,
+        "gpu_hours": 0.0,
+    }
+    for run_id in sorted(relevant_run_ids):
+        summary_path = runs_dir / run_id / "summary.json"
+        if not summary_path.is_file():
+            continue
+        usage = _read_json(summary_path).get("resources", {})
+        for field in resources:
+            resources[field] += usage.get(field, 0) or 0
+    ordered = [completed[direction] for direction in RECENT_INTEREST_DIRECTIONS if direction in completed]
+    return {
+        "status": "complete" if len(ordered) == len(RECENT_INTEREST_DIRECTIONS) else "incomplete",
+        "campaign": "Qwen-controlled recent-interest FM template study",
+        "run_ids": sorted(relevant_run_ids),
+        "completed_scientific_experiments": ordered,
+        "implementation_failures": failures,
+        "best_validation_primary_after_campaign": 0.6051324605941772,
+        "accepted_candidate": False,
+        "resources": resources,
+        "metric_audit_notes": [
+            "Authoritative metrics are the standalone_metrics and ensemble_metrics fields above.",
+            "The raw time-decayed Qwen reflection mislabeled primary as GAUC and compared nDCG@5 "
+            "with a primary score; the raw reflection is preserved in experiment_index.json.",
+        ],
+        "hidden_test_labels_evaluated": False,
+    }
+
+
 def latest_sustained_run(runs_dir: Path, minimum_iterations: int = 3) -> dict | None:
     candidates = []
     for run_dir in sorted(runs_dir.glob("run_*")):
         paths = sorted(run_dir.glob("iterations/iteration_*/result.json"))
         if len(paths) >= minimum_iterations:
+            iterations = [compact_iteration(path) for path in paths]
+            completed = [
+                item
+                for item in iterations
+                if item.get("status") == "success"
+                and item.get("primary") is not None
+                and item.get("reflection_status") == "success"
+            ]
+            if len(completed) < minimum_iterations:
+                continue
             candidates.append(
                 {
                     "run_id": run_dir.name,
                     "summary": _read_json(run_dir / "summary.json"),
-                    "iterations": [compact_iteration(path) for path in paths],
+                    "iterations": iterations,
                 }
             )
     return candidates[-1] if candidates else None
@@ -100,6 +188,9 @@ def build_package(root: Path, output_dir: Path, include_checkpoints: bool = True
     iteration_paths = sorted(runs_dir.glob("run_*/iterations/iteration_*/result.json"))
     index = [compact_iteration(path) for path in iteration_paths]
     _write_json(output_dir / "experiment_index.json", index)
+
+    campaign = recent_interest_campaign(runs_dir)
+    _write_json(output_dir / "recent_interest_campaign.json", campaign)
 
     sustained = latest_sustained_run(runs_dir)
     _write_json(
@@ -161,6 +252,10 @@ def build_package(root: Path, output_dir: Path, include_checkpoints: bool = True
         "reflections_present": sum(item["reflection_status"] == "success" for item in index),
         "sustained_run_present": sustained is not None,
         "checkpoint_count": sum(record.get("present", False) for record in checkpoint_records),
+        "recent_interest_campaign_present": campaign["status"] == "complete",
+        "recent_interest_completed_experiments": len(
+            campaign["completed_scientific_experiments"]
+        ),
     }
     _write_json(output_dir / "manifest.json", manifest)
 
@@ -175,6 +270,7 @@ remain ignored because they contain large generated patches and transient output
 - `manifest.json`: benchmark and evidence-integrity summary.
 - `resource_report.json`: aggregate Qwen usage, runtime, iterations, failures, and interventions.
 - `experiment_index.json`: compact outcome and reflection for every autonomous iteration.
+- `recent_interest_campaign.json`: linked three-template Qwen study, recovery, metric audit, and usage.
 - `sustained_run.json`: the latest run containing at least three iterations in one process.
 - `checkpoint_manifest.json`: SHA-256 checksums and metadata for the nine accepted models.
 - `checkpoints/`: five base, three hour-aware, and one session-aware BPR FM checkpoints.

@@ -9,6 +9,7 @@ remain ignored because they contain large generated patches and transient output
 - `manifest.json`: benchmark and evidence-integrity summary.
 - `resource_report.json`: aggregate Qwen usage, runtime, iterations, failures, and interventions.
 - `experiment_index.json`: compact outcome and reflection for every autonomous iteration.
+- `recent_interest_campaign.json`: linked three-template Qwen study, recovery, metric audit, and usage.
 - `sustained_run.json`: the latest run containing at least three iterations in one process.
 - `checkpoint_manifest.json`: SHA-256 checksums and metadata for the nine accepted models.
 - `checkpoints/`: five base, three hour-aware, and one session-aware BPR FM checkpoints.

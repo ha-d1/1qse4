@@ -4,6 +4,81 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 
+INCUMBENT_CHECKPOINTS = [
+    "runs/ensemble_multineg_seed0/best.npz",
+    "runs/accepted_multineg_seed1/best.npz",
+    "runs/ensemble_multineg_seed2/best.npz",
+    "runs/ensemble_multineg_seed3/best.npz",
+    "runs/ensemble_multineg_seed4/best.npz",
+    "runs/hour_feature_seed0/best.npz",
+    "runs/hour_feature_seed1/best.npz",
+    "runs/hour_feature_seed2/best.npz",
+    "runs/session_feature_seed2/best.npz",
+]
+
+
+def recent_interest_scaffolds(preflight_status: str = "pending") -> Dict[str, Any]:
+    variants = {
+        "short-window recent-interest exposure features": (
+            "recent_short",
+            "Add prior-five-exposure author/video repeat and author-distance fields.",
+        ),
+        "long-window recent-interest exposure features": (
+            "recent_long",
+            "Add prior-twenty-exposure author/video repeat and author-distance fields.",
+        ),
+        "time-decayed recent-interest exposure features": (
+            "recent_time",
+            "Add elapsed-time author/video recency and recent-author-frequency fields.",
+        ),
+    }
+    scaffolds = {}
+    for direction, (feature_set, scientific_change) in variants.items():
+        scaffolds[direction] = {
+            "implementation_mode": "scaffold",
+            "scientific_change": scientific_change,
+            "expected_effect": (
+                "Improve the accepted nine-checkpoint ensemble through label-free, "
+                "within-user recent-interest diversity."
+            ),
+            "target_files": [
+                "candidate/data.py",
+                "candidate/model.py",
+                "candidate/train.py",
+            ],
+            "seed_schedule": [2],
+            "command": [
+                "python",
+                "candidate/train.py",
+                "--objective",
+                "bpr",
+                "--architecture",
+                "fm",
+                "--seed",
+                "2",
+                "--epochs",
+                "40",
+                "--k",
+                "16",
+                "--lr",
+                "0.00025",
+                "--negatives-per-positive",
+                "4",
+                "--batch-size",
+                "8192",
+                "--feature-set",
+                feature_set,
+            ],
+            "ensemble_checkpoints": list(INCUMBENT_CHECKPOINTS),
+            "instruction": (
+                "Use the exact locally tested scaffold and judge the candidate by its addition "
+                "to the accepted nine-checkpoint ensemble. Do not generate source code."
+            ),
+            "local_preflight": {"status": preflight_status},
+        }
+    return scaffolds
+
+
 def build_research_context(
     iteration: int,
     best_valid_metrics: Dict[str, float],
@@ -13,6 +88,7 @@ def build_research_context(
     candidate_sources: Dict[str, str] | None = None,
     reference_sources: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
+    active_scaffolds: Dict[str, Any] = {}
     return {
         "benchmark": {
             "dataset": "KuaiRand-Pure",
@@ -331,6 +407,39 @@ def build_research_context(
                     "below the declared significance threshold and does not justify promotion."
                 ),
             },
+            {
+                "direction": "short-window recent-interest exposure features",
+                "decision": "rejected by autonomous ensemble validation and closed by Qwen",
+                "evidence": {
+                    "run_id": "run_20260901T014142Z",
+                    "standalone_primary": 0.6045159101486206,
+                    "ensemble_primary": 0.6050341129302979,
+                    "incumbent_primary": 0.6051324605941772,
+                },
+                "instruction": "Do not repeat prior-five-exposure author/video features.",
+            },
+            {
+                "direction": "long-window recent-interest exposure features",
+                "decision": "rejected by autonomous ensemble validation",
+                "evidence": {
+                    "run_id": "run_20260901T014142Z",
+                    "standalone_primary": 0.6045420169830322,
+                    "ensemble_primary": 0.6050402522087097,
+                    "incumbent_primary": 0.6051324605941772,
+                },
+                "instruction": "Do not repeat prior-twenty-exposure author/video features.",
+            },
+            {
+                "direction": "time-decayed recent-interest exposure features",
+                "decision": "rejected by autonomous ensemble validation and closed by Qwen",
+                "evidence": {
+                    "run_id": "run_20260901T015212Z",
+                    "standalone_primary": 0.6045085191726685,
+                    "ensemble_primary": 0.6050400733947754,
+                    "incumbent_primary": 0.6051324605941772,
+                },
+                "instruction": "Do not repeat elapsed-time recency/frequency FM features.",
+            },
         ],
         "data_contract": {
             "user_id_type": "opaque string",
@@ -366,11 +475,10 @@ def build_research_context(
             "remaining_iterations": remaining_iterations,
             "remaining_seconds": max(0.0, remaining_seconds),
         },
-        # A new Qwen call is deliberately blocked until a distinct direction or a locally
-        # prevalidated scaffold is promoted into this allowlist.
-        "available_directions": [],
+        # Only locally preflighted, implementation-complete directions may reach Qwen.
+        "available_directions": list(active_scaffolds),
         "direction_contracts": {},
-        "prevalidated_experiment_scaffolds": {},
+        "prevalidated_experiment_scaffolds": active_scaffolds,
         "completed_prevalidated_experiment_scaffolds": {
             "prevalidated field-pair-weighted FM interaction scaffold": {
                 "implementation_mode": "scaffold",
@@ -449,6 +557,15 @@ def build_research_context(
                 "local_preflight": {"status": "passed"},
                 "validation_decision": "completed and rejected",
             },
+            **{
+                direction: {
+                    **scaffold,
+                    "validation_decision": "completed and rejected",
+                }
+                for direction, scaffold in recent_interest_scaffolds(
+                    preflight_status="passed"
+                ).items()
+            },
         },
         "constraints": [
             "train and validation only",
@@ -467,7 +584,7 @@ def build_research_context(
             "ListNet and listwise softmax have completed validation and must not be proposed again",
             "Soft-NDCG and top-k-weighted pairwise losses are suspended after repeated preflight failures",
             "weekday, explicit user-author crosses, and user-author statistic blends are rejected",
-            "generated user-history implementations are temporarily suspended for this run",
+            "unscaffolded generated user-history implementations are suspended",
             "simple train-label history-rate blends are rejected",
             "appended auxiliary feature matrices are suspended after repeated implementation failures",
             "DataFrame-based recency from unavailable event timestamps is suspended",
@@ -480,5 +597,6 @@ def build_research_context(
             "uniform BPR sampling beyond four negatives is rejected",
             "current-score hard-negative mining is rejected",
             "fixed ensemble family weights and temporal crosses are rejected",
+            "all three recent-interest FM scaffolds are rejected by ensemble validation",
         ],
     }

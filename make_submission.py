@@ -13,6 +13,9 @@ from baseline import FM
 from candidate.model import FieldWeightedFM
 from candidate.data import (
     TEMPORAL_CROSS_FIELDS,
+    RECENT_LONG_FIELDS,
+    RECENT_SHORT_FIELDS,
+    RECENT_TIME_FIELDS,
     fit_feature_encoder as fit_candidate_encoder,
     transform_rows as transform_candidate_rows,
 )
@@ -35,6 +38,9 @@ FEATURE_SETS = {
     "hour": HOUR_FIELDS,
     "session": SESSION_FIELDS,
     "temporal_cross": TEMPORAL_CROSS_FIELDS,
+    "recent_short": RECENT_SHORT_FIELDS,
+    "recent_long": RECENT_LONG_FIELDS,
+    "recent_time": RECENT_TIME_FIELDS,
     "user_author": USER_AUTHOR_FIELDS,
 }
 
@@ -46,7 +52,7 @@ def score_unlabelled_rows(checkpoint_path, train_rows, target_rows):
         feature_set = metadata["feature_set"]
         if feature_set not in FEATURE_SETS:
             raise ValueError(f"Unsupported final-inference feature set: {feature_set}")
-        if feature_set == "temporal_cross":
+        if feature_set in {"temporal_cross", "recent_short", "recent_long", "recent_time"}:
             encoder = fit_candidate_encoder(train_rows, fields=FEATURE_SETS[feature_set])
             X, labels, _ = transform_candidate_rows(
                 target_rows, encoder, include_labels=False

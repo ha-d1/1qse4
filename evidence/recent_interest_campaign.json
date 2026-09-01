@@ -1,0 +1,91 @@
+{
+  "status": "complete",
+  "campaign": "Qwen-controlled recent-interest FM template study",
+  "run_ids": [
+    "run_20260901T014142Z",
+    "run_20260901T015212Z"
+  ],
+  "completed_scientific_experiments": [
+    {
+      "run_id": "run_20260901T014142Z",
+      "iteration": 1,
+      "direction": "short-window recent-interest exposure features",
+      "hypothesis": "Incorporating short-window (prior-five-exposure) label-free interaction features—specifically author/video repeat counts and author-distance—into the Factorization Machine input space will improve within-user ranking GAUC and nDCG@5 by explicitly modeling recent interest diversity and recency, thereby complementing the existing hour-aware and session-aware features in the accepted ensemble.",
+      "standalone_metrics": {
+        "nDCG@5": 0.538038969039917,
+        "primary": 0.6045159101486206,
+        "GAUC": 0.6709927916526794
+      },
+      "ensemble_metrics": {
+        "nDCG@5": 0.5380395650863647,
+        "primary": 0.6050341129302979,
+        "GAUC": 0.672028660774231
+      },
+      "accepted": false,
+      "reflection_status": "success",
+      "reflection_decision": "close"
+    },
+    {
+      "run_id": "run_20260901T014142Z",
+      "iteration": 2,
+      "direction": "long-window recent-interest exposure features",
+      "hypothesis": "Incorporating long-window (prior-twenty-exposure) label-free interaction features—specifically author/video repeat counts and author-distance—into the Factorization Machine input space will improve within-user ranking GAUC and nDCG@5 by explicitly modeling recent interest diversity and recency, thereby complementing the existing hour-aware and session-aware features in the accepted ensemble.",
+      "standalone_metrics": {
+        "nDCG@5": 0.538088321685791,
+        "primary": 0.6045420169830322,
+        "GAUC": 0.6709956526756287
+      },
+      "ensemble_metrics": {
+        "nDCG@5": 0.5380510687828064,
+        "primary": 0.6050402522087097,
+        "GAUC": 0.672029435634613
+      },
+      "accepted": false,
+      "reflection_status": "success",
+      "reflection_decision": "refine"
+    },
+    {
+      "run_id": "run_20260901T015212Z",
+      "iteration": 1,
+      "direction": "time-decayed recent-interest exposure features",
+      "hypothesis": "Incorporating time-decayed recent-interest exposure features (elapsed-time author/video recency and recent-author-frequency) into the Factorization Machine input space will improve within-user ranking GAUC and nDCG@5 by explicitly modeling recent interest diversity and recency, complementing the existing hour-aware and session-aware features in the accepted ensemble.",
+      "standalone_metrics": {
+        "nDCG@5": 0.5380475521087646,
+        "primary": 0.6045085191726685,
+        "GAUC": 0.6709694862365723
+      },
+      "ensemble_metrics": {
+        "nDCG@5": 0.5380507707595825,
+        "primary": 0.6050400733947754,
+        "GAUC": 0.672029435634613
+      },
+      "accepted": false,
+      "reflection_status": "success",
+      "reflection_decision": "close"
+    }
+  ],
+  "implementation_failures": [
+    {
+      "run_id": "run_20260901T014142Z",
+      "iteration": 3,
+      "error": "TokenBudgetExceeded('LLM call blocked before transmission: remaining=52000, prompt_reservation=52887, minimum_output=256, token_cap=52000')",
+      "reflection_status": "success"
+    }
+  ],
+  "best_validation_primary_after_campaign": 0.6051324605941772,
+  "accepted_candidate": false,
+  "resources": {
+    "prompt_tokens": 35697,
+    "response_tokens": 4195,
+    "total_tokens": 39892,
+    "llm_calls": 7,
+    "wall_clock_seconds": 756.593420582,
+    "manual_interventions": 0,
+    "gpu_hours": 0.0
+  },
+  "metric_audit_notes": [
+    "Authoritative metrics are the standalone_metrics and ensemble_metrics fields above.",
+    "The raw time-decayed Qwen reflection mislabeled primary as GAUC and compared nDCG@5 with a primary score; the raw reflection is preserved in experiment_index.json."
+  ],
+  "hidden_test_labels_evaluated": false
+}

@@ -34,6 +34,9 @@ from candidate.model import (
 from baseline import FM
 from candidate.train import save_checkpoint
 from candidate.data import (
+    RECENT_LONG_FIELDS,
+    RECENT_SHORT_FIELDS,
+    RECENT_TIME_FIELDS,
     TEMPORAL_CROSS_FIELDS,
     fit_feature_encoder as fit_candidate_encoder,
     transform_rows as transform_candidate_rows,
@@ -56,6 +59,7 @@ from agent import (
     command_with_checkpoint,
     command_with_verified_data_dir,
     coding_token_budget,
+    compact_planning_context,
     load_prior_experiment_history,
     proposal_from_scaffold,
     proposal_requires_shared_parameter_effect,
@@ -74,6 +78,7 @@ from evaluate_ensemble import (
     within_user_blend,
     within_user_zscore_average,
 )
+from evaluate_candidate_addition import candidate_addition_metrics
 from llm_common import parse_plan, parse_proposal, parse_reflection, redact_secrets
 from llm_common import SYSTEM_INSTRUCTION
 from llm_factory import create_llm_client
@@ -255,6 +260,29 @@ class DevelopmentDataTests(unittest.TestCase):
         np.testing.assert_allclose(weights[5:8], 1.0)
         np.testing.assert_allclose(weights[8:], 2.0)
 
+    def test_candidate_addition_evaluates_incumbent_plus_candidate(self) -> None:
+        splits = {
+            "train": [(20220408, "u", "v0", "a", "t", 10.0, 1)],
+            "valid": [
+                (20220422, "u", "v1", "a", "t", 10.0, 1),
+                (20220422, "u", "v2", "a", "t", 10.0, 0),
+            ],
+        }
+        score_arrays = iter(
+            [np.asarray([0.9, 0.1]), np.asarray([0.8, 0.2])]
+        )
+        with patch(
+            "evaluate_candidate_addition.load_selected", return_value=splits
+        ), patch(
+            "evaluate_candidate_addition.score_unlabelled_rows",
+            side_effect=lambda *_args: (next(score_arrays), {}),
+        ) as scorer:
+            metrics = candidate_addition_metrics(
+                [Path("incumbent.npz")], Path("candidate.npz"), "unused"
+            )
+        self.assertEqual(scorer.call_count, 2)
+        self.assertEqual(metrics["primary"], 1.0)
+
     def test_within_user_zscore_ensemble_is_group_local(self) -> None:
         users = ["u1", "u1", "u2", "u2"]
         first = np.asarray([1.0, 2.0, 100.0, 200.0])
@@ -368,6 +396,38 @@ class DevelopmentDataTests(unittest.TestCase):
             scores, metadata = score_unlabelled_rows(checkpoint, train, target)
         self.assertEqual(metadata["feature_set"], "temporal_cross")
         self.assertEqual(scores.shape, (1,))
+
+    def test_recent_interest_variants_are_label_independent(self) -> None:
+        rows = [
+            (20220408, "u", "v1", "a1", "t", 10.0, 1, 930, 1_000_000),
+            (20220408, "u", "v2", "a2", "t", 20.0, 0, 931, 1_030_000),
+            (20220408, "u", "v3", "a1", "t", 30.0, 1, 932, 1_090_000),
+            (20220408, "u", "v1", "a1", "t", 40.0, 0, 940, 1_400_000),
+        ]
+        flipped = [row[:6] + (1 - row[6],) + row[7:] for row in rows]
+        for fields in (RECENT_SHORT_FIELDS, RECENT_LONG_FIELDS, RECENT_TIME_FIELDS):
+            encoder = fit_candidate_encoder(rows, fields=fields)
+            original, labels, _ = transform_candidate_rows(
+                rows, encoder, include_labels=True
+            )
+            changed, flipped_labels, _ = transform_candidate_rows(
+                flipped, encoder, include_labels=True
+            )
+            np.testing.assert_array_equal(original, changed)
+            np.testing.assert_array_equal(labels, [1.0, 0.0, 1.0, 0.0])
+            np.testing.assert_array_equal(flipped_labels, [0.0, 1.0, 0.0, 1.0])
+            self.assertEqual(original.shape[1], len(fields))
+
+    def test_recent_interest_uses_only_prior_rows(self) -> None:
+        rows = [
+            (20220408, "u", "v1", "a1", "t", 10.0, 1, 930, 1_000_000),
+            (20220408, "u", "v2", "a2", "t", 20.0, 0, 931, 1_030_000),
+            (20220408, "u", "v3", "a1", "t", 30.0, 1, 932, 1_090_000),
+        ]
+        encoder = fit_candidate_encoder(rows, fields=RECENT_SHORT_FIELDS)
+        X, _, _ = transform_candidate_rows(rows, encoder, include_labels=True)
+        author_seen_column = len(SESSION_FIELDS)
+        self.assertNotEqual(int(X[0, author_seen_column]), int(X[2, author_seen_column]))
 
     def test_checkpoint_persists_weights_and_metadata(self) -> None:
         model = SimpleNamespace(
@@ -803,6 +863,28 @@ class ProposalTests(unittest.TestCase):
         self.assertIn("load_training_auxiliary", contracts["development_data.py"])
         self.assertLess(sum(map(len, contracts.values())), 2_000)
 
+    def test_planning_context_compacts_evidence_but_keeps_decisions(self) -> None:
+        context = build_research_context(3, {"primary": 0.6051}, [], 100, 1)
+        context["candidate_sources"] = {"candidate/model.py": "large source"}
+        context["recent_experiments"] = [
+            {
+                "direction": "short-window recent-interest exposure features",
+                "status": "success",
+                "reflection": {
+                    "outcome_summary": "Did not improve.",
+                    "direction_decision": "close",
+                    "next_action": "Try the next scaffold.",
+                    "evidence": ["very verbose evidence"],
+                },
+            }
+        ]
+        compact = compact_planning_context(context)
+        serialised = json.dumps(compact)
+        self.assertNotIn("large source", serialised)
+        self.assertNotIn("very verbose evidence", serialised)
+        self.assertIn("Try the next scaffold", serialised)
+        self.assertIn("time-decayed recent-interest", serialised)
+
     def test_plan_rejects_protected_target(self) -> None:
         plan = {
             "hypothesis": "h",
@@ -1103,6 +1185,13 @@ class ProposalTests(unittest.TestCase):
         )
         direction = "prevalidated field-pair-weighted FM interaction scaffold"
         self.assertEqual(context["available_directions"], [])
+        self.assertEqual(context["prevalidated_experiment_scaffolds"], {})
+        completed_directions = {
+            item["direction"] for item in context["completed_autonomous_directions"]
+        }
+        self.assertIn("short-window recent-interest exposure features", completed_directions)
+        self.assertIn("long-window recent-interest exposure features", completed_directions)
+        self.assertIn("time-decayed recent-interest exposure features", completed_directions)
         self.assertTrue(
             any(
                 item["direction"]
@@ -1425,8 +1514,9 @@ class RunnerAndLoggerTests(unittest.TestCase):
                     json.dumps(
                         {
                             "iteration": iteration,
-                            "status": "failed",
+                            "status": "success",
                             "accepted": False,
+                            "metrics": {"primary": 0.6 - iteration * 0.001},
                             "attempts": [],
                             "reflection": {
                                 "status": "success",
@@ -1466,8 +1556,8 @@ class RunnerAndLoggerTests(unittest.TestCase):
                             {
                                 "iteration": value,
                                 "reflection_status": "success",
-                                "status": "success" if value == 1 else "failed",
-                                "primary": 0.6 if value == 1 else None,
+                                "status": "success",
+                                "primary": 0.6,
                             }
                             for value in range(1, 4)
                         ],
@@ -1487,7 +1577,7 @@ class RunnerAndLoggerTests(unittest.TestCase):
             result = verify_evidence(evidence)
         self.assertEqual(result["status"], "verified")
         self.assertEqual(result["reflections"], 3)
-        self.assertEqual(result["completed_validations"], 1)
+        self.assertEqual(result["completed_validations"], 3)
 
     def test_generated_data_path_is_replaced_with_verified_path(self) -> None:
         command = ["python", "candidate/train.py", "--data_dir", "data", "--seed", "0"]

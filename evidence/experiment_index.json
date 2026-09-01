@@ -2,6 +2,7 @@
   {
     "run_id": "run_20260831T021526Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -30,6 +31,7 @@
   {
     "run_id": "run_20260831T022221Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -58,6 +60,7 @@
   {
     "run_id": "run_20260831T023524Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -86,6 +89,7 @@
   {
     "run_id": "run_20260831T023655Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -113,6 +117,7 @@
   {
     "run_id": "run_20260831T023844Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -140,6 +145,7 @@
   {
     "run_id": "run_20260831T024450Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -164,6 +170,7 @@
   {
     "run_id": "run_20260831T024629Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -188,6 +195,7 @@
   {
     "run_id": "run_20260831T024752Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -212,6 +220,7 @@
   {
     "run_id": "run_20260831T024920Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -236,6 +245,7 @@
   {
     "run_id": "run_20260831T025039Z",
     "iteration": 1,
+    "direction": "sampled or full listwise ranking loss rather than plain BPR",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -263,6 +273,7 @@
   {
     "run_id": "run_20260831T025244Z",
     "iteration": 1,
+    "direction": "sampled or full listwise ranking loss rather than plain BPR",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -290,6 +301,7 @@
   {
     "run_id": "run_20260831T025411Z",
     "iteration": 1,
+    "direction": "sampled or full listwise ranking loss rather than plain BPR",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -317,6 +329,7 @@
   {
     "run_id": "run_20260831T025536Z",
     "iteration": 1,
+    "direction": "sampled or full listwise ranking loss rather than plain BPR",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -344,6 +357,7 @@
   {
     "run_id": "run_20260831T025725Z",
     "iteration": 1,
+    "direction": "sampled or full listwise ranking loss rather than plain BPR",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -370,6 +384,7 @@
   {
     "run_id": "run_20260831T025827Z",
     "iteration": 1,
+    "direction": "sampled or full listwise ranking loss rather than plain BPR",
     "status": "success",
     "accepted": false,
     "primary": 0.48367124795913696,
@@ -394,6 +409,7 @@
   {
     "run_id": "run_20260831T030317Z",
     "iteration": 1,
+    "direction": "sampled or full listwise ranking loss rather than plain BPR",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -420,6 +436,7 @@
   {
     "run_id": "run_20260831T033019Z",
     "iteration": 1,
+    "direction": "sampled or full listwise ranking loss rather than plain BPR",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -446,6 +463,7 @@
   {
     "run_id": "run_20260831T033155Z",
     "iteration": 1,
+    "direction": "sampled or full listwise ranking loss rather than plain BPR",
     "status": "success",
     "accepted": false,
     "primary": 0.5967028737068176,
@@ -470,6 +488,7 @@
   {
     "run_id": "run_20260831T033441Z",
     "iteration": 1,
+    "direction": "sampled or full listwise ranking loss rather than plain BPR",
     "status": "success",
     "accepted": false,
     "primary": 0.5159013271331787,
@@ -494,6 +513,7 @@
   {
     "run_id": "run_20260831T033840Z",
     "iteration": 1,
+    "direction": "top-k metric weighting only if mathematically distinct from plain BPR and not ListNet",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -520,6 +540,7 @@
   {
     "run_id": "run_20260831T034247Z",
     "iteration": 1,
+    "direction": "top-k metric weighting only if mathematically distinct from plain BPR and not ListNet",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -547,6 +568,7 @@
   {
     "run_id": "run_20260831T034732Z",
     "iteration": 1,
+    "direction": "leakage-safe time features",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -573,6 +595,7 @@
   {
     "run_id": "run_20260831T042837Z",
     "iteration": 1,
+    "direction": "user history features using past events only",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -599,6 +622,7 @@
   {
     "run_id": "run_20260831T063204Z",
     "iteration": 1,
+    "direction": "user history features using past events only",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -625,6 +649,7 @@
   {
     "run_id": "run_20260831T064019Z",
     "iteration": 1,
+    "direction": "multi-objective learning with train-only auxiliary feedback",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -651,6 +676,7 @@
   {
     "run_id": "run_20260831T075227Z",
     "iteration": 1,
+    "direction": "multi-objective learning with train-only auxiliary feedback",
     "status": "success",
     "accepted": false,
     "primary": 0.6038926243782043,
@@ -677,6 +703,7 @@
   {
     "run_id": "run_20260831T083951Z",
     "iteration": 1,
+    "direction": "multi-objective learning with train-only auxiliary feedback",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -704,6 +731,7 @@
   {
     "run_id": "run_20260831T084901Z",
     "iteration": 1,
+    "direction": "leakage-safe time features",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -730,6 +758,7 @@
   {
     "run_id": "run_20260831T085227Z",
     "iteration": 1,
+    "direction": "watch-duration-aware objective using train-only play_time_ms",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -756,6 +785,7 @@
   {
     "run_id": "run_20260831T090533Z",
     "iteration": 1,
+    "direction": "gradient-sharing click auxiliary head",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -782,6 +812,7 @@
   {
     "run_id": "run_20260831T100051Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -823,6 +854,7 @@
   {
     "run_id": "run_20260831T100051Z",
     "iteration": 2,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -864,6 +896,7 @@
   {
     "run_id": "run_20260831T100051Z",
     "iteration": 3,
+    "direction": "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -907,6 +940,7 @@
   {
     "run_id": "run_20260831T100510Z",
     "iteration": 1,
+    "direction": "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -951,6 +985,7 @@
   {
     "run_id": "run_20260831T100510Z",
     "iteration": 2,
+    "direction": "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -994,6 +1029,7 @@
   {
     "run_id": "run_20260831T100510Z",
     "iteration": 3,
+    "direction": "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1036,6 +1072,7 @@
   {
     "run_id": "run_20260831T101553Z",
     "iteration": 1,
+    "direction": "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1081,6 +1118,7 @@
   {
     "run_id": "run_20260831T101553Z",
     "iteration": 2,
+    "direction": "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1125,6 +1163,7 @@
   {
     "run_id": "run_20260831T101553Z",
     "iteration": 3,
+    "direction": "alternative interaction architectures evaluated against the multi-negative BPR incumbent",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1169,6 +1208,7 @@
   {
     "run_id": "run_20260831T122629Z",
     "iteration": 1,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1211,6 +1251,7 @@
   {
     "run_id": "run_20260831T122629Z",
     "iteration": 2,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1253,6 +1294,7 @@
   {
     "run_id": "run_20260831T122629Z",
     "iteration": 3,
+    "direction": null,
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1294,6 +1336,7 @@
   {
     "run_id": "run_20260831T122930Z",
     "iteration": 1,
+    "direction": "prevalidated field-pair-weighted FM interaction scaffold",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1337,6 +1380,7 @@
   {
     "run_id": "run_20260831T122930Z",
     "iteration": 2,
+    "direction": "prevalidated field-pair-weighted FM interaction scaffold",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1382,6 +1426,7 @@
   {
     "run_id": "run_20260831T122930Z",
     "iteration": 3,
+    "direction": "prevalidated field-pair-weighted FM interaction scaffold",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1425,6 +1470,7 @@
   {
     "run_id": "run_20260831T123431Z",
     "iteration": 1,
+    "direction": "prevalidated field-pair-weighted FM interaction scaffold",
     "status": "success",
     "accepted": false,
     "primary": 0.6035248637199402,
@@ -1467,6 +1513,7 @@
   {
     "run_id": "run_20260831T123431Z",
     "iteration": 2,
+    "direction": "prevalidated field-pair-weighted FM interaction scaffold",
     "status": "success",
     "accepted": false,
     "primary": 0.6030241250991821,
@@ -1509,6 +1556,7 @@
   {
     "run_id": "run_20260831T123431Z",
     "iteration": 3,
+    "direction": "prevalidated field-pair-weighted FM interaction scaffold",
     "status": "success",
     "accepted": false,
     "primary": 0.6031533479690552,
@@ -1551,6 +1599,7 @@
   {
     "run_id": "run_20260831T141532Z",
     "iteration": 1,
+    "direction": "censored watch-ratio auxiliary objective on shared FM ranking parameters",
     "status": "failed",
     "accepted": false,
     "primary": null,
@@ -1590,6 +1639,178 @@
       "manual_interventions": 0,
       "gpu_hours": 0.0,
       "wall_clock_seconds": 110.645559542
+    }
+  },
+  {
+    "run_id": "run_20260901T014142Z",
+    "iteration": 1,
+    "direction": "short-window recent-interest exposure features",
+    "status": "success",
+    "accepted": false,
+    "primary": 0.6050341129302979,
+    "improvement_over_prior_best": -9.834766387939453e-05,
+    "hypothesis": "Incorporating short-window (prior-five-exposure) label-free interaction features—specifically author/video repeat counts and author-distance—into the Factorization Machine input space will improve within-user ranking GAUC and nDCG@5 by explicitly modeling recent interest diversity and recency, thereby complementing the existing hour-aware and session-aware features in the accepted ensemble.",
+    "attempts": 1,
+    "failed_attempts": 0,
+    "errors": [],
+    "reflection": {
+      "outcome_summary": "The experiment completed successfully with no implementation errors. The proposed short-window recent-interest exposure features were integrated into the Factorization Machine ensemble. However, the resulting model (Primary: 0.60503, GAUC: 0.67203) failed to improve upon the prior best baseline (Primary: 0.60513), showing a negligible decline of ~0.0001 in the primary metric.",
+      "hypothesis_assessment": "The hypothesis that short-window label-free interaction features (author/video repeat counts, author-distance) provide orthogonal signal to existing temporal/session features is not supported by this validation result. The features appear redundant with the existing hour-aware and session-gap features, or their signal is too weak to overcome the noise introduced by additional parameters in the FM input space.",
+      "causal_analysis": "The lack of improvement suggests scientific redundancy rather than implementation failure. The 'recent interest' signal is likely already captured by the existing session-gap and hour-of-day features, which model temporal proximity and session boundaries. Adding explicit counts of recent exposures does not add new discriminative power for ranking within the FM framework. The slight degradation may stem from overfitting to sparse recent interactions or simply adding noise to the feature space without increasing capacity for distinct patterns.",
+      "evidence": [
+        "Validation Primary Metric: 0.60503 < Prior Best: 0.60513",
+        "Validation GAUC: 0.67203 (no significant jump compared to baseline expectations)",
+        "Experiment status: Success (no code/runtime errors)",
+        "Preflight status: Success (feature engineering logic validated locally)"
+      ],
+      "lessons": [
+        "Simple count-based recent interaction features may be redundant with existing session-gap and temporal features in KuaiRand-Pure.",
+        "Adding features to an FM ensemble can introduce noise if the new features do not provide distinct, non-linear interactions with existing features.",
+        "Label-free recent exposure features are a low-risk but low-reward direction; they may serve as a baseline for more complex sequence models rather than standalone FM features."
+      ],
+      "direction_decision": "close",
+      "next_action": "Close the 'short-window recent-interest exposure features' direction. Shift focus to exploring non-linear interaction modeling (e.g., DeepFM or NN-based architectures) or auxiliary objectives, as simple feature additions to FM have plateaued.",
+      "confidence": 0.9
+    },
+    "reflection_status": "success",
+    "resources": {
+      "prompt_tokens": 13507,
+      "response_tokens": 1156,
+      "total_tokens": 14663,
+      "llm_calls": 2,
+      "iterations": 1,
+      "manual_interventions": 0,
+      "gpu_hours": 0.0,
+      "wall_clock_seconds": 248.965155208
+    }
+  },
+  {
+    "run_id": "run_20260901T014142Z",
+    "iteration": 2,
+    "direction": "long-window recent-interest exposure features",
+    "status": "success",
+    "accepted": false,
+    "primary": 0.6050402522087097,
+    "improvement_over_prior_best": -9.22083854675293e-05,
+    "hypothesis": "Incorporating long-window (prior-twenty-exposure) label-free interaction features—specifically author/video repeat counts and author-distance—into the Factorization Machine input space will improve within-user ranking GAUC and nDCG@5 by explicitly modeling recent interest diversity and recency, thereby complementing the existing hour-aware and session-aware features in the accepted ensemble.",
+    "attempts": 1,
+    "failed_attempts": 0,
+    "errors": [],
+    "reflection": {
+      "outcome_summary": "Iteration 2 completed successfully with no implementation errors. The long-window recent-interest exposure features were integrated into the Factorization Machine. However, the model failed to improve upon the prior best validation primary metric (0.60513 vs 0.60504), resulting in a negligible degradation of -9.2e-05. The hypothesis that these features would provide orthogonal, stable signals complementing existing temporal features was not supported by the validation results.",
+      "hypothesis_assessment": "The hypothesis is rejected for this specific feature set. While the scientific premise (modeling long-term interest diversity) is valid, the specific implementation (prior-twenty-exposure author/video repeat and author-distance) did not yield a measurable gain. The lack of improvement suggests these features are either redundant with the existing hour-aware/session-aware features or introduce noise without sufficient signal-to-noise ratio to overcome the incumbent model's performance.",
+      "causal_analysis": "The failure is likely due to feature redundancy rather than implementation error. The prior-twenty-exposure window may overlap significantly with the coarse-grained session and hour buckets already present in the ensemble, failing to provide new information. Alternatively, the 'author-distance' metric might be too sparse or noisy at this window size to be effective in a linear FM context. Since the validation result is non-improving and the implementation was stable, this is a scientific null result, not a technical failure.",
+      "evidence": [
+        "Validation primary metric: 0.6050402522087097 (Current) vs 0.6051324605941772 (Prior Best).",
+        "Improvement: -9.22e-05 (Negative).",
+        "No implementation errors or crashes occurred.",
+        "GAUC (0.6720) and nDCG@5 (0.5380) did not exceed prior benchmarks."
+      ],
+      "lessons": [
+        "Long-window aggregate features (repeat counts, distance) may be redundant with existing coarse temporal features (hour/session) in FM architectures.",
+        "Increasing the window size from 5 to 20 exposures did not resolve the redundancy issue observed in the short-window attempt, suggesting the signal is not in the window length but in the feature type or interaction with other features.",
+        "Linear models (FM) may struggle to leverage complex, sparse long-window features without non-linear transformations or deeper architectures."
+      ],
+      "direction_decision": "refine",
+      "next_action": "Close the 'long-window recent-interest exposure features' direction as a standalone feature addition. Instead, refine the approach by either: 1) Investigating non-linear interactions of these features in a deeper model (e.g., DeepFM) rather than FM, or 2) Exploring different long-window features that are less likely to be redundant with temporal buckets (e.g., semantic similarity of consumed content rather than just author/video IDs).",
+      "confidence": 0.85
+    },
+    "reflection_status": "success",
+    "resources": {
+      "prompt_tokens": 27316,
+      "response_tokens": 2424,
+      "total_tokens": 29740,
+      "llm_calls": 4,
+      "iterations": 2,
+      "manual_interventions": 0,
+      "gpu_hours": 0.0,
+      "wall_clock_seconds": 498.079923333
+    }
+  },
+  {
+    "run_id": "run_20260901T014142Z",
+    "iteration": 3,
+    "direction": null,
+    "status": "failed",
+    "accepted": false,
+    "primary": null,
+    "improvement_over_prior_best": 0.0,
+    "hypothesis": null,
+    "attempts": 0,
+    "failed_attempts": 0,
+    "errors": [],
+    "reflection": {
+      "outcome_summary": "Iteration 3 failed due to a TokenBudgetExceeded error. The LLM call was blocked before transmission because the prompt reservation (52,887 tokens) exceeded the available token cap (52,000 tokens). No training or validation metrics were generated.",
+      "hypothesis_assessment": "The scientific hypothesis remains untested. Since no code was executed, there is no empirical evidence to support or refute the proposed method. The failure is purely infrastructural.",
+      "causal_analysis": "The root cause is a configuration mismatch between the estimated prompt size and the hard token limit. The system reserved 52,887 tokens for the prompt, but the cap is 52,000. This indicates that the prompt construction logic (likely including history, instructions, or data samples) is too large for the current budget constraints.",
+      "evidence": [
+        "Error: TokenBudgetExceeded('LLM call blocked before transmission: remaining=52000, prompt_reservation=52887, minimum_output=256, token_cap=52000')",
+        "No validation metrics were produced (metrics: null).",
+        "Prior best validation metric remains 0.6051324605941772."
+      ],
+      "lessons": [
+        "Prompt size estimation must be conservative; the reservation exceeded the cap by 887 tokens.",
+        "Implement a pre-flight check to ensure prompt size < (token_cap - minimum_output) before attempting execution.",
+        "Consider reducing context window, truncating history, or simplifying instructions to fit within the 52,000 token limit."
+      ],
+      "direction_decision": "refine",
+      "next_action": "Reduce the prompt size by truncating conversation history or simplifying the system prompt to ensure the total token count stays below 51,744 (52,000 - 256), then re-attempt the experiment.",
+      "confidence": 0.95
+    },
+    "reflection_status": "success",
+    "resources": {
+      "prompt_tokens": 28024,
+      "response_tokens": 2879,
+      "total_tokens": 30903,
+      "llm_calls": 5,
+      "iterations": 3,
+      "manual_interventions": 0,
+      "gpu_hours": 0.0,
+      "wall_clock_seconds": 501.812952833
+    }
+  },
+  {
+    "run_id": "run_20260901T015212Z",
+    "iteration": 1,
+    "direction": "time-decayed recent-interest exposure features",
+    "status": "success",
+    "accepted": false,
+    "primary": 0.6050400733947754,
+    "improvement_over_prior_best": -9.238719940185547e-05,
+    "hypothesis": "Incorporating time-decayed recent-interest exposure features (elapsed-time author/video recency and recent-author-frequency) into the Factorization Machine input space will improve within-user ranking GAUC and nDCG@5 by explicitly modeling recent interest diversity and recency, complementing the existing hour-aware and session-aware features in the accepted ensemble.",
+    "attempts": 1,
+    "failed_attempts": 0,
+    "errors": [],
+    "reflection": {
+      "outcome_summary": "The experiment successfully executed the 'time-decayed recent-interest exposure features' hypothesis using the Factorization Machine architecture. The candidate model achieved a primary GAUC of 0.60504, which is statistically indistinguishable from and slightly lower than the prior best of 0.60513. The nDCG@5 also decreased from 0.60504 (prior best context) to 0.53805. The validation result is conclusive: the new feature set did not improve ranking performance.",
+      "hypothesis_assessment": "The hypothesis that time-decayed recency and frequency features would improve within-user ranking GAUC and nDCG@5 is rejected. The addition of these features to the FM input space provided no measurable benefit over the existing hour-aware and session-aware features. The lack of improvement suggests that the current feature set already captures the relevant temporal signals, or that the FM architecture cannot effectively leverage these specific non-linear interactions.",
+      "causal_analysis": "The failure is scientific, not implementation-based. The scaffold passed preflight, and the training completed without error. The metrics show a clear non-improvement. Since the prior static exposure features also failed to improve performance, and this dynamic/time-decayed variant also failed, it indicates that simply adding more temporal exposure statistics to the FM is insufficient. The FM may be too simple to model the complex interactions between user history and these new features, or the features themselves are redundant with existing session-aware encodings.",
+      "evidence": [
+        "Primary GAUC: 0.60504 vs Prior Best: 0.60513 (Delta: -0.00009)",
+        "nDCG@5: 0.53805 vs Prior Best: 0.60504 (Significant decrease)",
+        "Experiment status: success (no implementation errors)",
+        "Prior iteration with static exposure features also failed to improve"
+      ],
+      "lessons": [
+        "Adding more granular temporal features (time-decayed recency/frequency) to a Factorization Machine does not guarantee performance gains if the base architecture lacks the capacity to model their interactions.",
+        "Static and dynamic exposure features may be redundant with existing session-aware features in this specific ensemble.",
+        "Non-improving validation results on a completed, error-free run constitute strong evidence against the hypothesis, regardless of implementation correctness.",
+        "Further improvements likely require architectural changes (e.g., DeepFM, DIN) rather than just feature engineering within the FM framework."
+      ],
+      "direction_decision": "close",
+      "next_action": "Close the 'time-decayed recent-interest exposure features' direction. Shift focus to exploring deeper neural architectures (e.g., DeepFM or attention-based models) that can better capture non-linear interactions between user history and item features, as FM feature engineering has consistently plateaued.",
+      "confidence": 0.95
+    },
+    "reflection_status": "success",
+    "resources": {
+      "prompt_tokens": 7673,
+      "response_tokens": 1316,
+      "total_tokens": 8989,
+      "llm_calls": 2,
+      "iterations": 1,
+      "manual_interventions": 0,
+      "gpu_hours": 0.0,
+      "wall_clock_seconds": 254.778703708
     }
   }
 ]

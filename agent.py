@@ -116,6 +116,9 @@ def load_prior_experiment_history(runs_dir: Path, limit: int = 6) -> list[dict]:
             {
                 "run_id": path.parents[2].name,
                 "iteration": payload.get("iteration"),
+                "direction": payload.get("planning", {}).get("plan", {}).get(
+                    "direction"
+                ),
                 "hypothesis": proposal.get("hypothesis", "proposal unavailable"),
                 "status": payload.get("status"),
                 "accepted": payload.get("accepted", False),
@@ -132,6 +135,52 @@ def load_prior_experiment_history(runs_dir: Path, limit: int = 6) -> list[dict]:
         )
     records.reverse()
     return records
+
+
+def compact_planning_context(context: dict) -> dict:
+    """Keep scientific memory while removing verbose evidence from planner prompts."""
+    compact = {
+        key: value
+        for key, value in context.items()
+        if key
+        not in {
+            "candidate_sources",
+            "read_only_reference_sources",
+            "completed_prevalidated_experiment_scaffolds",
+        }
+    }
+    compact["completed_autonomous_directions"] = [
+        {
+            "direction": item.get("direction"),
+            "decision": item.get("decision"),
+            "instruction": item.get("instruction"),
+        }
+        for item in context.get("completed_autonomous_directions", [])
+    ]
+    compact["recent_experiments"] = [
+        {
+            "run_id": item.get("run_id"),
+            "iteration": item.get("iteration"),
+            "direction": item.get("direction"),
+            "hypothesis": item.get("hypothesis"),
+            "status": item.get("status"),
+            "accepted": item.get("accepted", False),
+            "metrics": item.get("metrics"),
+            "error": item.get("error"),
+            "reflection": {
+                key: (item.get("reflection") or {}).get(key)
+                for key in (
+                    "outcome_summary",
+                    "direction_decision",
+                    "next_action",
+                )
+            }
+            if item.get("reflection")
+            else None,
+        }
+        for item in context.get("recent_experiments", [])
+    ]
+    return compact
 
 
 def build_reflection_context(
@@ -352,6 +401,9 @@ def main() -> None:
     )
 
     terminal_stop_reason = None
+    run_directions: set[str] = {
+        record["direction"] for record in history if record.get("direction")
+    }
     try:
         while convergence.stop_reason(resources.snapshot()["wall_clock_seconds"]) is None:
             iteration = convergence.iterations + 1
@@ -366,6 +418,18 @@ def main() -> None:
                 candidate_sources=candidate_sources(root),
                 reference_sources=reference_api_contracts(),
             )
+            context["available_directions"] = [
+                direction
+                for direction in context.get("available_directions", [])
+                if direction not in run_directions
+            ]
+            context["prevalidated_experiment_scaffolds"] = {
+                direction: scaffold
+                for direction, scaffold in context.get(
+                    "prevalidated_experiment_scaffolds", {}
+                ).items()
+                if direction in context["available_directions"]
+            }
             if not context.get("available_directions"):
                 terminal_stop_reason = "no_approved_research_direction"
                 break
@@ -377,11 +441,7 @@ def main() -> None:
             iteration_llm_start = resources.snapshot()["total_tokens"]
             planning_failed = False
             if hasattr(llm, "plan"):
-                planning_context = {
-                    key: value
-                    for key, value in context.items()
-                    if key not in {"candidate_sources", "read_only_reference_sources"}
-                }
+                planning_context = compact_planning_context(context)
                 try:
                     requested_planning_tokens = int(
                         config["llm"].get("planning_max_tokens", 1200)
@@ -421,6 +481,7 @@ def main() -> None:
                             scaffold["instruction"],
                         ]
                     context["approved_research_plan"] = planning_result.plan
+                    run_directions.add(planning_result.plan["direction"])
                     context["llm_budget"] = {
                         "coding_max_tokens": coding_token_budget(
                             context,
@@ -580,6 +641,40 @@ def main() -> None:
                             "Candidate completed without writing the required checkpoint: "
                             f"{candidate_checkpoint}"
                         )
+                    standalone_metrics = dict(metrics)
+                    ensemble_checkpoints = (
+                        list(scaffold.get("ensemble_checkpoints", []))
+                        if scaffold
+                        else []
+                    )
+                    if ensemble_checkpoints:
+                        ensemble_command = ["python", "evaluate_candidate_addition.py"]
+                        for checkpoint in ensemble_checkpoints:
+                            ensemble_command.extend(["--incumbent", checkpoint])
+                        ensemble_command.extend(
+                            [
+                                "--candidate",
+                                str(candidate_checkpoint),
+                                "--data_dir",
+                                str(data_dir),
+                            ]
+                        )
+                        ensemble_process = runner.run(ensemble_command)
+                        ensemble_record = asdict(ensemble_process)
+                        ensemble_record["stdout"] = redact_secrets(
+                            ensemble_process.stdout
+                        )
+                        ensemble_record["stderr"] = redact_secrets(
+                            ensemble_process.stderr
+                        )
+                        attempt_record["ensemble_evaluation"] = ensemble_record
+                        attempt_record["standalone_metrics"] = standalone_metrics
+                        if ensemble_process.status != "success":
+                            raise RuntimeError(
+                                ensemble_process.stderr
+                                or f"ensemble status={ensemble_process.status}"
+                            )
+                        metrics = parse_metrics(ensemble_process.stdout)
                     observed_score = metrics["primary"]
                     accepted = metrics["primary"] > best_metrics["primary"]
                     if accepted:
@@ -706,6 +801,7 @@ def main() -> None:
             history.append(
                 {
                     "iteration": iteration,
+                    "direction": approved_plan.get("direction"),
                     "hypothesis": proposal.hypothesis if proposal is not None else "proposal unavailable",
                     "status": iteration_record["status"],
                     "accepted": iteration_record["accepted"],

@@ -296,6 +296,7 @@
     {
       "run_id": "run_20260831T123431Z",
       "iteration": 1,
+      "direction": "prevalidated field-pair-weighted FM interaction scaffold",
       "status": "success",
       "accepted": false,
       "primary": 0.6035248637199402,
@@ -338,6 +339,7 @@
     {
       "run_id": "run_20260831T123431Z",
       "iteration": 2,
+      "direction": "prevalidated field-pair-weighted FM interaction scaffold",
       "status": "success",
       "accepted": false,
       "primary": 0.6030241250991821,
@@ -380,6 +382,7 @@
     {
       "run_id": "run_20260831T123431Z",
       "iteration": 3,
+      "direction": "prevalidated field-pair-weighted FM interaction scaffold",
       "status": "success",
       "accepted": false,
       "primary": 0.6031533479690552,
