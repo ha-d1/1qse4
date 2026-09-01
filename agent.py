@@ -28,6 +28,7 @@ import data
 from evaluate import evaluate
 from experiment import (
     dependency_versions,
+    ensemble_scores,
     make_result,
     prepare_candidate_data,
     profile_data,
@@ -367,10 +368,12 @@ class CampaignController:
                     seed_results.append(result)
             finally:
                 self.sandbox.remove_named_worktree("baseline")
-        arrays = [np.load(baseline_dir / "seeds" / str(seed) / "scores.npy", allow_pickle=False)
-                  for seed in (0, 1, 2)]
-        ensemble = np.mean(np.stack(arrays), axis=0)
+        arrays = [
+            np.load(baseline_dir / "seeds" / str(seed) / "scores.npy", allow_pickle=False)
+            for seed in (0, 1, 2)
+        ]
         rows = self.splits["valid"]
+        ensemble = ensemble_scores([row[1] for row in rows], arrays)
         ensemble_metrics = _plain(evaluate([row[1] for row in rows],
                                            [row[6] for row in rows], ensemble))
         self.state["baseline"] = {
@@ -429,8 +432,8 @@ class CampaignController:
                 "Expanding static basic fields produced no gain; five fields outperformed the expanded set within noise.",
                 "FM dimensions 8, 16, and 32 were effectively unchanged; capacity is not the bottleneck.",
                 "Train-field CTR and watch-duration residuals raised the three-seed primary from 0.58749 to 0.59315. A within-user pairwise finetune raised it to 0.59688 at pair_blend 0.12; sweeping only that measured component selected pair_blend 0.8 and reached 0.60231. All are already present in current_best_source.",
-                "Seed/lower-LR ensembles, user-history residuals, item/time residuals, censored-watch auxiliary training, joint-click auxiliary training, and the attempted listwise softmax failed; do not repeat them.",
-                "Improve the existing pairwise objective itself rather than adding another residual or only changing pair_blend: consider more informative positive-negative sampling, hard negatives, field-specific tables, training schedule, or regularization. Preserve the working current source.",
+                "The current source keeps the measured LightGBM residual winner and adds optional train-only temporal FM selection, numerical/context/history features, and hard-negative pair sampling. Enable each switch only in a controlled experiment because the combined first attempt regressed validation.",
+                "XGBoost 3.4.1 rank:ndcg on the five encoded fields scored primary 0.567982, below the LightGBM residual; do not promote that configuration.",
             ],
             "action_schema": {
                 "inspect": {
@@ -911,10 +914,12 @@ class CampaignController:
 
     def _ensemble_metrics(self, iteration, seeds=(0, 1, 2)):
         iteration_dir = self.store.iteration_dir(iteration["number"])
-        arrays = [np.load(iteration_dir / "seeds" / str(seed) / "scores.npy", allow_pickle=False)
-                  for seed in seeds]
-        scores = np.mean(np.stack(arrays), axis=0)
+        arrays = [
+            np.load(iteration_dir / "seeds" / str(seed) / "scores.npy", allow_pickle=False)
+            for seed in seeds
+        ]
         rows = self.splits["valid"]
+        scores = ensemble_scores([row[1] for row in rows], arrays)
         return _plain(evaluate([row[1] for row in rows], [row[6] for row in rows], scores))
 
     def _execute_candidate(self, iteration, worktree):
@@ -1159,7 +1164,7 @@ class CampaignController:
                 rows = self.splits["valid"]
                 metrics = _plain(evaluate(
                     [row[1] for row in rows], [row[6] for row in rows],
-                    np.mean(np.stack(arrays), axis=0)))
+                    ensemble_scores([row[1] for row in rows], arrays)))
                 hashes_match = _metrics_equal(metrics, self.state["best_ensemble_metrics"])
             else:
                 metrics = None

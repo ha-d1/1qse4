@@ -604,6 +604,18 @@ def normalize_within_user(user_ids, scores):
         normalized[np.asarray(indices)] = ranks
     return normalized
 
+def ensemble_scores(user_ids, score_arrays):
+    """Apply the submission-time within-user normalization before averaging."""
+    arrays = [np.asarray(scores, dtype=np.float64) for scores in score_arrays]
+    if not arrays:
+        raise ValueError("At least one score array is required")
+    if any(array.ndim != 1 or len(array) != len(user_ids) for array in arrays):
+        raise ValueError("Score arrays must be one-dimensional and row-aligned with user IDs")
+    if any(not np.isfinite(array).all() for array in arrays):
+        raise ValueError("Score arrays must contain only finite values")
+    normalized = [normalize_within_user(user_ids, array) for array in arrays]
+    return np.mean(np.stack(normalized), axis=0)
+
 
 def create_submission(data_dir, score_paths, output_path):
     if len(score_paths) != 3:
@@ -618,8 +630,8 @@ def create_submission(data_dir, score_paths, output_path):
             raise ValueError(f"Score array {path} is not row-aligned with {len(rows)} test rows")
         if not np.isfinite(scores).all():
             raise ValueError(f"Score array {path} contains NaN or Inf")
-        arrays.append(normalize_within_user(user_ids, scores))
-    ensemble = np.mean(np.stack(arrays), axis=0)
+        arrays.append(scores)
+    ensemble = ensemble_scores(user_ids, arrays)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_name(output_path.name + f".tmp-{os.getpid()}")

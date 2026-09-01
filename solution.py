@@ -4,7 +4,75 @@ try:
 except ImportError:
     _lgb = None
 
-from baseline import fit_fm
+from baseline import FM
+from data import encode
+from evaluate import evaluate
+
+
+def _fit_fm_fixed(splits, k, lr, epochs, bs, seed):
+    encoded, dimension = encode(splits)
+    x_train, y_train, _ = encoded['train']
+    model = FM(dimension, k=k, lr=lr, seed=seed)
+    rng = np.random.default_rng(seed)
+    for _ in range(epochs):
+        order = rng.permutation(len(y_train))
+        for start in range(0, len(order), bs):
+            batch = order[start:start + bs]
+            model.step(x_train[batch], y_train[batch])
+    return model, encoded
+
+
+def _screen_fm(train_rows, holdout_rows, k, lr, max_epochs, bs, seed):
+    screen_splits = {
+        'train': train_rows,
+        'valid': holdout_rows,
+        'test': holdout_rows,
+    }
+    encoded, dimension = encode(screen_splits)
+    x_train, y_train, _ = encoded['train']
+    x_holdout, y_holdout, users_holdout = encoded['valid']
+    model = FM(dimension, k=k, lr=lr, seed=seed)
+    rng = np.random.default_rng(seed)
+    best_primary = float('-inf')
+    best_epoch = max_epochs
+    for epoch in range(1, max_epochs + 1):
+        order = rng.permutation(len(y_train))
+        for start in range(0, len(order), bs):
+            batch = order[start:start + bs]
+            model.step(x_train[batch], y_train[batch])
+        metrics = evaluate(users_holdout, y_holdout, model.predict(x_holdout))
+        primary = float(metrics['primary'])
+        if np.isfinite(primary) and primary > best_primary + 1e-5:
+            best_primary = primary
+            best_epoch = epoch
+    return best_primary, best_epoch
+
+
+def _fit_temporal_fm(splits, config, seed):
+    """Select FM learning rate/epochs on a train-only temporal holdout."""
+    train_rows = splits['train']
+    early_rows = [row for row in train_rows if row[0] <= 20220418]
+    holdout_rows = [row for row in train_rows if 20220419 <= row[0] <= 20220421]
+    k = max(1, int(config.get('k', 16)))
+    lr = float(config.get('lr', 0.001))
+    epochs = max(1, int(config.get('epochs', 40)))
+    bs = max(1, int(config.get('bs', 8192)))
+    if not bool(config.get('temporal_select', False)):
+        return _fit_fm_fixed(splits, k, lr, epochs, bs, seed)
+
+    if not np.isfinite(lr) or lr <= 0.0:
+        raise ValueError('lr must be finite and positive')
+    if not early_rows or not holdout_rows:
+        return _fit_fm_fixed(splits, k, lr, epochs, bs, seed)
+    max_epochs = max(epochs, int(config.get('screen_epochs', epochs)))
+    rates = (lr, lr * 0.5)
+    best = (float('-inf'), lr, epochs)
+    for candidate_lr in rates:
+        primary, selected_epochs = _screen_fm(
+            early_rows, holdout_rows, k, candidate_lr, max_epochs, bs, seed)
+        if primary > best[0]:
+            best = (primary, candidate_lr, selected_epochs)
+    return _fit_fm_fixed(splits, k, best[1], best[2], bs, seed)
 
 
 def _field_prior_adjustment(encoded, target_split, base):
@@ -83,6 +151,105 @@ def _value(row, name, index):
             return row[index]
         except (TypeError, IndexError):
             return None
+
+def _context_history_features(data_access, target_split, x_train, x_target, y_train):
+    """Build train-only numerical context and exposure-history features."""
+    if data_access is None:
+        return x_train, x_target, x_train.shape[1]
+    columns = ('date', 'user_id', 'video_id', 'hourmin', 'time_ms',
+               'duration_ms', 'tab', 'is_rand')
+    train_file = 'log_standard_4_08_to_4_21_pure.csv'
+    target_file = (train_file if target_split == 'train'
+                   else 'log_standard_4_22_to_5_08_pure.csv')
+    try:
+        train_rows = list(data_access.iter_rows(train_file, columns, split='train'))
+        target_rows = list(data_access.iter_rows(target_file, columns, split=target_split))
+        video_rows = data_access.iter_rows(
+            'video_features_basic_pure.csv', ('video_id', 'author_id'))
+        author_by_video = {_key(_value(row, 'video_id', 0)): _key(
+            _value(row, 'author_id', 1)) for row in video_rows}
+    except Exception:
+        return x_train, x_target, x_train.shape[1]
+    if len(train_rows) != len(x_train) or len(target_rows) != len(x_target):
+        return x_train, x_target, x_train.shape[1]
+    y_train = np.asarray(y_train, dtype=np.float64).reshape(-1)
+    if y_train.size != len(train_rows) or not np.isfinite(y_train).all():
+        return x_train, x_target, x_train.shape[1]
+    global_rate = float(np.clip(np.mean(y_train), 1e-5, 1.0 - 1e-5))
+    prior = 20.0
+    user_total, user_pos = {}, {}
+    video_total, video_pos = {}, {}
+    author_total, author_pos = {}, {}
+    pair_total = {}
+    last_user = {}
+
+    def ordinal(row):
+        date = _number(_value(row, 'date', 0))
+        hourmin = _number(_value(row, 'hourmin', 3))
+        if not np.isfinite(date):
+            return np.nan
+        minute = 0.0 if not np.isfinite(hourmin) else (
+            np.floor(hourmin / 100.0) * 60.0 + hourmin % 100.0)
+        return date * 1440.0 + minute
+
+    def rate(total, positive):
+        return (positive + prior * global_rate) / (total + prior)
+
+    def build(rows, labels=None, update=False):
+        features = np.zeros((len(rows), 12), dtype=np.float64)
+        for index, row in enumerate(rows):
+            user = _key(_value(row, 'user_id', 1))
+            video = _key(_value(row, 'video_id', 2))
+            author = author_by_video.get(video, video)
+            pair = (user, video)
+            total_u = user_total.get(user, 0.0)
+            total_v = video_total.get(video, 0.0)
+            total_a = author_total.get(author, 0.0)
+            total_p = pair_total.get(pair, 0.0)
+            time_value = ordinal(row)
+            previous = last_user.get(user)
+            gap = (max(0.0, time_value - previous)
+                   if np.isfinite(time_value) and previous is not None else 0.0)
+            duration = _number(_value(row, 'duration_ms', 5))
+            hourmin = _number(_value(row, 'hourmin', 3))
+            minute = 0.0 if not np.isfinite(hourmin) else (
+                np.floor(hourmin / 100.0) * 60.0 + hourmin % 100.0)
+            date = _number(_value(row, 'date', 0))
+            random_flag = _number(_value(row, 'is_rand', 7))
+            features[index] = (
+                np.log1p(total_u),
+                np.log1p(total_v),
+                np.log1p(total_a),
+                np.log1p(total_p),
+                rate(total_u, user_pos.get(user, 0.0)),
+                rate(total_v, video_pos.get(video, 0.0)),
+                rate(total_a, author_pos.get(author, 0.0)),
+                np.log1p(max(0.0, gap)),
+                np.log1p(max(0.0, duration)) if np.isfinite(duration) else 0.0,
+                minute / 1440.0,
+                date - 20220408.0 if np.isfinite(date) else 0.0,
+                random_flag if np.isfinite(random_flag) else 0.0,
+            )
+            if update:
+                label = float(labels[index] > 0.5)
+                user_total[user] = total_u + 1.0
+                user_pos[user] = user_pos.get(user, 0.0) + label
+                video_total[video] = total_v + 1.0
+                video_pos[video] = video_pos.get(video, 0.0) + label
+                author_total[author] = total_a + 1.0
+                author_pos[author] = author_pos.get(author, 0.0) + label
+                pair_total[pair] = total_p + 1.0
+                if np.isfinite(time_value):
+                    last_user[user] = time_value
+        return features
+
+    train_context = build(train_rows, y_train, update=True)
+    target_context = build(target_rows)
+    return (
+        np.column_stack((np.asarray(x_train, dtype=np.float32), train_context)),
+        np.column_stack((np.asarray(x_target, dtype=np.float32), target_context)),
+        x_train.shape[1],
+    )
 
 
 def _watch_residual(data_access, target_split, n_target):
@@ -192,6 +359,16 @@ def _pairwise_delta(x_train, y_train, base_train, x_target, seed, config):
     learning_rate = float(config.get('pair_lr', 0.03))
     regularization = float(config.get('pair_reg', 0.001))
     groups = np.arange(starts.size)
+    def adjusted_scores(ids):
+        scores = np.asarray(base_train[ids], dtype=np.float64).copy()
+        for table_index, column in enumerate(active):
+            table = tables[table_index]
+            scores += np.asarray(
+                [table.get(int(key), 0.0) for key in codes_train[ids, column]],
+                dtype=np.float64,
+            )
+        return scores
+
     for _ in range(epochs):
         rng.shuffle(groups)
         for group in groups:
@@ -201,10 +378,15 @@ def _pairwise_delta(x_train, y_train, base_train, x_target, seed, config):
             if positives.size == 0 or negatives.size == 0:
                 continue
             count = min(max_pairs, positives.size, negatives.size)
-            if positives.size > count:
+            if bool(config.get('hard_negatives', False)):
+                positive_order = np.argsort(adjusted_scores(positives), kind='stable')
+                negative_order = np.argsort(adjusted_scores(negatives), kind='stable')[::-1]
+                positives = positives[positive_order[:count]]
+                negatives = negatives[negative_order[:count]]
+            else:
                 positives = rng.choice(positives, size=count, replace=False)
-            if negatives.size > count:
                 negatives = rng.choice(negatives, size=count, replace=False)
+
             for positive, negative in zip(positives, negatives):
                 margin = float(base_train[positive] - base_train[negative])
                 for table_index, column in enumerate(active):
@@ -243,7 +425,8 @@ def _pairwise_delta(x_train, y_train, base_train, x_target, seed, config):
     return np.clip(output / scale, -4.0, 4.0)
 
 
-def _lightgbm_residual(x_train, y_train, base_train, x_target, seed, config):
+def _lightgbm_residual(x_train, y_train, base_train, x_target, seed, config,
+                       categorical_count):
     """Fit a train-only LambdaRank correction on top of the current score."""
     if _lgb is None:
         return np.zeros(np.asarray(x_target).shape[0], dtype=np.float64)
@@ -291,7 +474,7 @@ def _lightgbm_residual(x_train, y_train, base_train, x_target, seed, config):
         label=y_train[order],
         group=groups,
         init_score=base_train[order],
-        categorical_feature=list(range(x_train.shape[1])),
+        categorical_feature=list(range(categorical_count)),
         free_raw_data=False,
     )
     booster = _lgb.train(params, train_set, num_boost_round=rounds)
@@ -300,10 +483,7 @@ def _lightgbm_residual(x_train, y_train, base_train, x_target, seed, config):
 
 
 def score(splits, data_access, target_split: str, seed: int, config: dict) -> np.ndarray:
-    params = {name: config[name] for name in ('k', 'lr', 'epochs', 'bs', 'patience') if name in config}
-    params['seed'] = seed
-    params.setdefault('verbose', False)
-    model, encoded = fit_fm(splits, **params)
+    model, encoded = _fit_temporal_fm(splits, config, seed)
     x_train, y_train, _ = encoded['train']
     x_target, _, _ = encoded[target_split]
     base_train = np.asarray(model.predict(x_train), dtype=np.float64).reshape(-1)
@@ -324,6 +504,12 @@ def score(splits, data_access, target_split: str, seed: int, config: dict) -> np
         train_watch = _watch_residual(data_access, 'train', base_train.size)
         train_pairwise = _pairwise_delta(x_train, y_train, base_train, x_train, seed, config)
         current_train = train_residual + blend * train_watch + pair_blend * train_pairwise
+        if bool(config.get('context_features', False)):
+            lgb_train, lgb_target, categorical_count = _context_history_features(
+                data_access, target_split, x_train, x_target, y_train)
+        else:
+            lgb_train, lgb_target, categorical_count = x_train, x_target, x_train.shape[1]
         result += lightgbm_blend * _lightgbm_residual(
-            x_train, y_train, current_train, x_target, seed, config)
+            lgb_train, y_train, current_train, lgb_target, seed, config,
+            categorical_count)
     return np.nan_to_num(result, nan=0.0, posinf=30.0, neginf=-30.0)

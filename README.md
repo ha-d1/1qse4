@@ -215,8 +215,25 @@ Reason: the `user_id × video_id` interaction already captures most of the learn
 
 The current `solution.py` optionally trains a LightGBM LambdaRank model on the train split and
 uses its residual as a correction to the existing FM, field-prior, watch-duration, and pairwise
-score. This is a train-only ranking objective with no validation or test labels exposed to the
-candidate. If LightGBM is unavailable, the candidate falls back to the NumPy-only score.
+score. Ensemble validation now applies the same within-user percentile normalization as
+submission generation, so validation and submission scoring have identical semantics.
+
+Three additional train-only experiments are implemented behind explicit candidate config flags:
+
+- `temporal_select`: screen FM learning rate and epoch count on dates 20220419–20220421,
+  then refit on the official train split.
+- `context_features`: add numerical, context, and train-history features (counts, smoothed
+  rates, recency, duration, time, and exposure flags) to the LightGBM ranker.
+- `hard_negatives`: select the currently hardest positive/negative exposures per user instead
+  of random pairs for the pairwise table update.
+
+The flags default off so the measured current winner remains reproducible; they are available
+for controlled train-only experiments. If LightGBM is unavailable, the candidate falls back to
+the NumPy-only score.
+
+XGBoost 3.4.1 `rank:ndcg` was benchmarked on the five encoded categorical fields. It reached
+`GAUC=0.618973`, `nDCG@5=0.516990`, `primary=0.567982` on the validation split, below the
+current LightGBM residual, so it was not promoted.
 
 Other libraries are welcome. Suitable candidates include LightGBM, XGBoost, CatBoost, PyTorch,
 SciPy, and custom native modules, provided they are declared as dependencies, available before
@@ -228,7 +245,7 @@ The LightGBM LambdaRank residual is the first library-backed ranking experiment.
 below remain available for exploration, ordered by estimated likelihood:
 
 1. **Ranking losses.** Improve the current pairwise and LambdaRank objectives with harder negatives, field-specific models, or better schedules.
-2. **User history sequences.** The current features **do not use behavioral sequences at all**. Each KuaiRand user has hundreds to thousands of interactions in train, leaving DIN / SIM-style interest modeling completely unexplored.
+2. **User history sequences.** The optional context/history path now provides aggregate history features; DIN / SIM-style interest modeling remains unexplored.
 3. **Multi-objective learning.** The logs also contain `is_click`, `is_like`, `is_follow`, `is_comment`, `is_forward`, and `play_time_ms`, which can be used as auxiliary tasks for the primary `long_view` task.
 4. **Model watch duration.** This is precisely CWM's contribution: it models watch duration as **censored regression** (when a video finishes, the true viewing duration is truncated, so a one-sided loss is used instead of squared error). This is a research-rich direction.
 5. **Change the model.** DeepFM / DCN / xDeepFM. Since experiments show that capacity is not the bottleneck, **prioritize this after items 1–4**.
