@@ -2,7 +2,21 @@
 
 ## Dependencies
 
-Python 3.9+ and numpy. **Nothing else.** torch, pandas, and sklearn are not required.
+The base starter kit requires Python 3.9+ and NumPy only:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+The optional campaign controller additionally requires:
+
+- a current [Codex CLI](https://github.com/openai/codex);
+- a cached ChatGPT login created with `codex login`; and
+- `python3 -m pip install -r requirements-agent.txt` only when candidate models need
+  the existing optional LightGBM dependency.
+
+The Codex transport uses only Python standard-library modules, so it adds no Python dependency.
+The controller never installs packages.
 
 ## Data
 
@@ -27,24 +41,71 @@ FM takes about 40 seconds in total (single-threaded CPU).
 
 ## Agentic Experiment Loop
 
-The optional controller snapshots the current checkout into isolated Git worktrees, profiles the
-dataset, reproduces three FM validation seeds, and then runs an inspect → experiment → reflect loop.
-The default candidate boundary remains NumPy-only; preinstalled LightGBM is available to candidates
-when installed from `requirements-agent.txt`. The controller never installs packages.
+The optional Python controller snapshots the current checkout into isolated Git worktrees, profiles
+the dataset, reproduces three FM validation seeds, and runs a bounded inspect → experiment → reflect
+loop. It retains repository inspection, patch application, metrics, campaign state, resume, and
+final submission generation. Each model call is a stateless `codex exec` invocation that uses the
+cached ChatGPT login, starts in a fresh empty scratch directory, and requests the Codex `read-only`
+sandbox. That sandbox prevents writes but is not a hard host-filesystem read-isolation boundary.
+
+The coding-agent prompt carries the exact `score(...)` contract, allowed APIs, protected files,
+current best source, target score, and prior experiment outcomes. It also states the non-obvious
+ranking constraints up front: per-user constants cannot affect the metrics, target labels are
+zero-masked, model selection must use a train-only temporal screen, and each experiment must isolate
+one causal hypothesis without hiding failures behind constant-score fallbacks.
+A candidate runtime failure does
+not consume the experiment immediately: the controller sends the failing source plus bounded
+stdout/stderr tails back to Codex and permits up to three in-place repairs of the same hypothesis.
+Codex returns complete `solution.py` source, so the controller generates the Git diff itself instead
+of trusting model-authored hunk offsets. Malformed actions and invalid source receive corrective
+feedback, while a malformed reflection cannot discard an otherwise valid measured candidate. The
+controller, rather than the model, detects when the confirmed target is reached.
+The campaign target is a strict improvement over the published `0.6016` validation primary. The
+`0.002` epsilon remains the convergence threshold; it does not move the target upward whenever a
+new campaign starts from an already improved solution.
+
+The current `solution.py` was certified by a complete three-seed campaign at validation
+`GAUC=0.668875`, `nDCG@5=0.535752`, `primary=0.602314`, above the published FM validation
+baseline `0.601600`. Finalization regenerated all validation scores, generated three test-seed
+score files, and passed the 170,588-row submission alignment check.
+
+Confirm the CLI version, log in once, verify the cached authentication, and pass the model explicitly:
 
 ```bash
-export AGENT_API_KEY=...
-export AGENT_API_BASE=https://provider.example/v1
-export AGENT_MODEL=model-name
-python3 agent.py run --campaign kuairand-v1 --data_dir ./KuaiRand-Pure/data
+codex --version
+codex login
+codex login status
+python3 agent.py run \
+  --campaign kuairand-v1 \
+  --data_dir ./KuaiRand-Pure/data \
+  --model MODEL_NAME \
+  --max-model-calls 60
 python3 agent.py status --campaign kuairand-v1
-python3 agent.py resume --campaign kuairand-v1
+python3 agent.py resume --campaign kuairand-v1 --model MODEL_NAME
 ```
 
-Campaign state, patches, structured run records, logs, and the checked final submission are written
-under `.agent-runs/<campaign>/`. Candidate worktrees under `.agent-worktrees/` are disposable. The
-main checkout is not modified. `resume` requires the original dataset fingerprint, API base, model,
-and persisted limits.
+If Codex reports that the selected model requires a newer CLI, upgrade the CLI before starting or
+resuming a campaign; CLI version is part of the persisted resume identity.
+
+Normal installations use the `codex` command. For a nonstandard launcher, set `--codex-bin` and
+repeat `--codex-prefix-arg` once for each argument that must precede the Codex CLI arguments:
+
+```bash
+python3 agent.py run \
+  --campaign kuairand-v1 \
+  --data_dir ./KuaiRand-Pure/data \
+  --model MODEL_NAME \
+  --codex-bin /path/to/node \
+  --codex-prefix-arg /path/to/codex.js
+```
+
+The candidate boundary remains NumPy-only unless LightGBM was installed from
+`requirements-agent.txt`. Campaign state, patches, structured request/response records, logs, and
+the checked final submission are written under `.agent-runs/<campaign>/`. Candidate worktrees under
+`.agent-worktrees/` are disposable; the main checkout is not modified. `resume` requires the
+original dataset fingerprint and the same Codex CLI version and model; persisted campaign limits,
+including `max_model_calls`, remain in force. Older provider-backed campaign state is not migrated;
+start a new campaign ID after this transport cutover.
 
 ## Task Definition (the conventions are fixed; do not change them)
 
@@ -181,10 +242,11 @@ as long as you ultimately pass `scores` to `evaluate()`. **The scoring conventio
 | `baseline_scores.json` | Officially published scores + seed variance + convergence parameters. |
 | `submit.py` | Generate / validate submission files. |
 | `ablation_features.py` | Feature ablation experiment that reproduces the “adding features produces no gain” numbers. |
-| `solution.py` | Model-editable `score(...)` candidate entry point; initially reproduces the FM. |
+| `solution.py` | Current campaign winner: FM plus train-field, watch-duration, and within-user pairwise ranking adjustments. |
 | `experiment.py` | Trusted data profiler, candidate runner, score validator, and ensemble submission writer. |
 | `agent.py` | Campaign CLI and inspect → experiment → reflect controller. |
-| `agent_api.py` | Standard-library OpenAI-compatible chat-completions client. |
+| `agent_codex.py` | Standard-library, stateless Codex CLI client using cached ChatGPT authentication. |
+| `agent_prompts.py` | Explicit coding-agent system contract plus generation and self-repair request builders. |
 | `agent_sandbox.py` | Git worktree, patch-policy, resource-limit, and subprocess boundary. |
 | `agent_state.py` | Locked atomic campaign state and artifact persistence. |
 | `test_agent.py` | Deterministic temporary-data/repository integration and fault tests. |

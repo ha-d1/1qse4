@@ -1,5 +1,6 @@
 """Autonomous inspect, experiment, reflect, and finalize campaign controller."""
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -10,13 +11,28 @@ import time
 
 import numpy as np
 
-from agent_api import client_from_environment
+from agent_codex import CodexCLIClient
+from agent_prompts import (
+    ACTION_NOTES,
+    CANDIDATE_CONSTRAINTS,
+    IMMUTABLE_RULES,
+    PROTECTED_PATHS,
+    SYSTEM_PROMPT,
+    build_generate_prompt,
+    build_repair_prompt,
+)
 from agent_sandbox import SandboxError, WorktreeSandbox
 from agent_state import CampaignStateError, CampaignStore
 from baseline import run_random
 import data
 from evaluate import evaluate
-from experiment import dependency_versions, make_result, profile_data, write_result
+from experiment import (
+    dependency_versions,
+    make_result,
+    prepare_candidate_data,
+    profile_data,
+    write_result,
+)
 
 
 CANONICAL_FILES = (
@@ -33,6 +49,9 @@ PUBLISHED_FM_PRIMARY = 0.6016
 MAX_INSPECTION_ROUNDS = 3
 MAX_INSPECTION_BYTES = 64 * 1024
 MAX_SEARCH_MATCHES = 100
+MAX_CANDIDATE_REPAIRS = 3
+MAX_FAILURE_FEEDBACK_BYTES = 16 * 1024
+MAX_SOURCE_CONTEXT_BYTES = 256 * 1024
 
 
 class ProtocolError(ValueError):
@@ -103,9 +122,9 @@ def validate_action(value):
         for item in requests:
             validate_inspection_request(item)
     elif action == "experiment":
-        _exact_keys(value, ("action", "name", "hypothesis", "patch", "config", "expected_effect"),
+        _exact_keys(value, ("action", "name", "hypothesis", "source", "config", "expected_effect"),
                     "experiment action")
-        for name in ("name", "hypothesis", "patch", "expected_effect"):
+        for name in ("name", "hypothesis", "source", "expected_effect"):
             _required_string(value[name], f"experiment {name}")
         if not isinstance(value["config"], dict):
             raise ProtocolError("experiment config must be a JSON object")
@@ -139,25 +158,6 @@ def _plain(value):
     return value
 
 
-def _redact(value):
-    secret = os.environ.get("AGENT_API_KEY")
-    secrets = [secret] if secret else []
-
-    def clean(item):
-        if isinstance(item, str):
-            result = item
-            for candidate in secrets:
-                result = result.replace(candidate, "[REDACTED]")
-            result = re.sub(r"(?i)Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", result)
-            return result
-        if isinstance(item, dict):
-            return {key: clean(child) for key, child in item.items()
-                    if str(key).lower() != "authorization"}
-        if isinstance(item, list):
-            return [clean(child) for child in item]
-        return item
-
-    return clean(value)
 
 
 def _metrics_equal(left, right, tolerance=1e-8):
@@ -183,6 +183,7 @@ class CampaignController:
         self.state = None
         self.profile = None
         self.splits = None
+        self.candidate_data_views = None
         self._session_started = None
         self._elapsed_before = 0.0
 
@@ -198,14 +199,14 @@ class CampaignController:
     @staticmethod
     def _validate_limits(limits):
         required = {
-            "max_iterations", "max_hours", "max_api_calls", "run_timeout", "memory_gb", "threads",
+            "max_iterations", "max_hours", "max_model_calls", "run_timeout", "memory_gb", "threads",
         }
         if set(limits) != required:
             raise ValueError(f"limits must contain exactly {sorted(required)}")
         for name, value in limits.items():
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
                 raise ValueError(f"{name} must be positive")
-        for name in ("max_iterations", "max_api_calls", "run_timeout", "threads"):
+        for name in ("max_iterations", "max_model_calls", "run_timeout", "threads"):
             if int(limits[name]) != limits[name]:
                 raise ValueError(f"{name} must be an integer")
             limits[name] = int(limits[name])
@@ -233,6 +234,13 @@ class CampaignController:
         self.profile = first
         return data_dir
 
+    def _prepare_candidate_views(self):
+        self.candidate_data_views = prepare_candidate_data(
+            self.state["data_dir"],
+            self.store.campaign_dir / "candidate-data",
+            self.state["data_fingerprint"],
+        )
+
     def run(self, data_dir, limits):
         limits = self._validate_limits(dict(limits))
         with self.store.lock():
@@ -255,10 +263,10 @@ class CampaignController:
                 "data_dir": str(data_dir),
                 "data_fingerprint": self.profile["fingerprint_sha256"],
                 "data_profile": self.profile,
-                "api": {"base_url": self.client.base_url, "model": self.client.model},
+                "codex": dict(self.client.identity),
                 "limits": limits,
                 "counters": {
-                    "api_calls": 0,
+                    "model_calls": 0,
                     "completed_iterations": 0,
                     "consecutive_model_failures": 0,
                     "consecutive_no_improvement": 0,
@@ -273,6 +281,7 @@ class CampaignController:
             self._session_started = self.clock()
             self._elapsed_before = 0.0
             try:
+                self._prepare_candidate_views()
                 self._prepare_baseline()
                 return self._campaign_loop()
             except BaseException as exc:
@@ -287,8 +296,9 @@ class CampaignController:
     def resume(self):
         with self.store.lock():
             self.state = self.store.load()
-            if self.state["api"] != {"base_url": self.client.base_url, "model": self.client.model}:
-                raise CampaignStateError("Resume requires the same API base URL and model")
+            if self.state["codex"] != self.client.identity:
+                raise CampaignStateError(
+                    "Resume requires the same Codex CLI version and model")
             data_dir = self._load_and_profile(self.state["data_dir"])
             if self.profile["fingerprint_sha256"] != self.state["data_fingerprint"]:
                 raise CampaignStateError("Dataset fingerprint changed; refusing to resume")
@@ -296,6 +306,7 @@ class CampaignController:
             self._session_started = self.clock()
             if self.state["status"] in TERMINAL_CAMPAIGN_STATES:
                 return self.state
+            self._prepare_candidate_views()
             for iteration in self.state["iterations"]:
                 if iteration["status"] not in TERMINAL_ITERATION_STATES:
                     self.sandbox.remove_worktree(iteration["number"])
@@ -349,7 +360,8 @@ class CampaignController:
                         baseline_dir / f"stderr-{seed}.log",
                         timeout=self.state["limits"]["run_timeout"],
                         memory_gb=self.state["limits"]["memory_gb"],
-                        threads=self.state["limits"]["threads"])
+                        threads=self.state["limits"]["threads"],
+                        candidate_data_dir=self.candidate_data_views["valid"])
                     if result["status"] != "ok":
                         raise CampaignStateError(f"FM baseline seed {seed} failed: {result['error']}")
                     seed_results.append(result)
@@ -373,7 +385,16 @@ class CampaignController:
         }
         self.state["best_config"] = config
         self.state["best_exploratory_primary"] = seed_results[0]["metrics"]["primary"]
-        self.state["target_primary"] = max(ensemble_metrics["primary"], PUBLISHED_FM_PRIMARY) + EPSILON
+        if self.recorded_baseline is not None and "target_primary" in self.recorded_baseline:
+            target_primary = self.recorded_baseline["target_primary"]
+            if (isinstance(target_primary, bool)
+                    or not isinstance(target_primary, (int, float))
+                    or not np.isfinite(target_primary)):
+                raise CampaignStateError("Recorded target_primary must be finite")
+            self.state["target_primary"] = float(target_primary)
+        else:
+            self.state["target_primary"] = float(
+                np.nextafter(PUBLISHED_FM_PRIMARY, np.inf))
         self.state["status"] = "running"
         self._save()
 
@@ -385,29 +406,13 @@ class CampaignController:
     def _system_context(self):
         return {
             "task": "Improve validation primary for within-user ranking of logged exposures.",
-            "immutable_rules": [
-                "Do not change evaluate.py, data.py, split dates, metrics, tuple order, or row identity.",
-                "Return unified diffs changing only solution.py or solution_*.py.",
-                "Never use test labels or test metrics for model selection.",
-                "Rank only each user's logged exposures; never retrieve from the full catalogue.",
-                "The candidate score function must return one finite row-aligned score per target row.",
-            ],
+            "immutable_rules": IMMUTABLE_RULES,
             "candidate_protocol": (
                 "score(splits, data_access, target_split: str, seed: int, config: dict) -> numpy.ndarray"
             ),
-            "candidate_constraints": [
-                "The candidate environment is NumPy-only unless dependencies.lightgbm_version is non-null.",
-                "Use only Python standard library, numpy, baseline, data, and available dependencies; never import pandas, torch, or sklearn.",
-                "Return a real patch with a git-style header: diff --git a/solution.py b/solution.py followed by ---/+++ headers.",
-                "Every line in a patch hunk must begin with one space, plus, or minus; never emit bare lines or ellipses.",
-                "Keep the first experiment patch small and self-contained; do not hand-write a large rewrite or guess hunk counts.",
-                "On patch validation failure, replace the patch with a new minimal applyable patch; do not repeat it or inspect again.",
-                "Experiment config is metadata only; all behavior must be implemented in solution.py.",
-            ],
-            "protected_paths": [
-                "evaluate.py", "data.py", "baseline.py", "experiment.py", "agent.py",
-                "agent_api.py", "agent_sandbox.py", "agent_state.py", "submit.py",
-            ],
+            "coding_agent_prompt": SYSTEM_PROMPT,
+            "candidate_constraints": CANDIDATE_CONSTRAINTS,
+            "protected_paths": PROTECTED_PATHS,
             "profile": self._model_profile(),
             "baseline": {
                 "local_fm_ensemble": self.state["baseline"]["fm_ensemble_metrics"],
@@ -415,10 +420,17 @@ class CampaignController:
                 "target_primary": self.state["target_primary"],
             },
             "dependencies": dependency_versions(),
+            "resource_limits": {
+                "run_timeout_seconds": self.state["limits"]["run_timeout"],
+                "memory_gb": self.state["limits"]["memory_gb"],
+                "threads": self.state["limits"]["threads"],
+            },
             "research_evidence": [
-                "Expanding static fields produced no gain; five fields outperformed the expanded set within noise.",
+                "Expanding static basic fields produced no gain; five fields outperformed the expanded set within noise.",
                 "FM dimensions 8, 16, and 32 were effectively unchanged; capacity is not the bottleneck.",
-                "Prioritize pairwise/listwise ranking loss, user histories, auxiliary objectives, watch-duration modeling, then model changes and time shift.",
+                "Train-field CTR and watch-duration residuals raised the three-seed primary from 0.58749 to 0.59315. A within-user pairwise finetune raised it to 0.59688 at pair_blend 0.12; sweeping only that measured component selected pair_blend 0.8 and reached 0.60231. All are already present in current_best_source.",
+                "Seed/lower-LR ensembles, user-history residuals, item/time residuals, censored-watch auxiliary training, joint-click auxiliary training, and the attempted listwise softmax failed; do not repeat them.",
+                "Improve the existing pairwise objective itself rather than adding another residual or only changing pair_blend: consider more informative positive-negative sampling, hard negatives, field-specific tables, training schedule, or regularization. Preserve the working current source.",
             ],
             "action_schema": {
                 "inspect": {
@@ -431,15 +443,11 @@ class CampaignController:
                 },
                 "experiment": {
                     "action": "experiment", "name": "string", "hypothesis": "string",
-                    "patch": "unified diff", "config": {}, "expected_effect": "string",
+                    "source": "complete solution.py", "config": {}, "expected_effect": "string",
                 },
                 "finish": {"action": "finish", "reason": "string"},
             },
-            "action_notes": [
-                "Inspection requests must be JSON objects with the exact kind/path/start/end or kind/path/pattern fields shown above.",
-                "Do not encode inspection requests as strings such as 'file|solution.py'.",
-                "Return exactly one action object and no Markdown wrapper.",
-            ],
+            "action_notes": ACTION_NOTES,
         }
 
     def _history(self):
@@ -462,11 +470,12 @@ class CampaignController:
     def _new_messages(self):
         return [
             {"role": "system", "content": json.dumps(self._system_context(), sort_keys=True)},
-            {"role": "user", "content": json.dumps({
-                "instruction": "Inspect if needed, then propose one evidence-backed experiment or finish.",
-                "prior_experiments": self._history(),
-                "best_metrics": self.state["best_ensemble_metrics"],
-            }, sort_keys=True)},
+            {"role": "user", "content": json.dumps(build_generate_prompt(
+                current_best_source=self._read_captured_file("solution.py"),
+                prior_experiments=self._history(),
+                best_metrics=self.state["best_ensemble_metrics"],
+                target_primary=self.state["target_primary"],
+            ), sort_keys=True)},
         ]
 
     def _record_failure(self):
@@ -478,31 +487,44 @@ class CampaignController:
         self._save()
 
     def _model_call(self, messages, iteration_dir, kind):
-        if self.state["counters"]["api_calls"] >= self.state["limits"]["max_api_calls"]:
-            self.state["stop_reason"] = "max_api_calls"
+        if (self.state["counters"]["model_calls"]
+                >= self.state["limits"]["max_model_calls"]):
+            self.state["stop_reason"] = "max_model_calls"
             self._save()
             return None
-        call_number = self.state["counters"]["api_calls"] + 1
+        call_number = self.state["counters"]["model_calls"] + 1
         request_id = f"{self.store.campaign_id}-{call_number:04d}"
-        request_record = _redact({"request_id": request_id, "messages": messages})
-        request_name = "request.json" if kind == "action" else "reflection-request.json"
-        response_name = "response.json" if kind == "action" else "reflection.json"
+        request_record = {"request_id": request_id, "messages": messages}
+        if kind == "action":
+            request_name, response_name = "request.json", "response.json"
+        elif kind == "reflection":
+            request_name, response_name = "reflection-request.json", "reflection.json"
+        else:
+            request_name, response_name = f"{kind}-request.json", f"{kind}-response.json"
         self.store.write_json(iteration_dir / request_name, request_record)
-        api_dir = iteration_dir / "api"
-        self.store.write_json(api_dir / f"{call_number:04d}-{kind}-request.json", request_record)
-        self.state["counters"]["api_calls"] = call_number
+        codex_dir = iteration_dir / "codex"
+        self.store.write_json(
+            codex_dir / f"{call_number:04d}-{kind}-request.json",
+            request_record,
+        )
+        self.state["counters"]["model_calls"] = call_number
         self._save()
         try:
             response = self.client.complete(messages, request_id)
         except Exception as exc:
             error = {"error": {"type": type(exc).__name__, "message": str(exc)}}
-            self.store.write_json(iteration_dir / response_name, _redact(error))
-            self.store.write_json(api_dir / f"{call_number:04d}-{kind}-response.json", _redact(error))
+            self.store.write_json(iteration_dir / response_name, error)
+            self.store.write_json(
+                codex_dir / f"{call_number:04d}-{kind}-response.json",
+                error,
+            )
             self._record_failure()
             return None
-        response = _redact(response)
         self.store.write_json(iteration_dir / response_name, response)
-        self.store.write_json(api_dir / f"{call_number:04d}-{kind}-response.json", response)
+        self.store.write_json(
+            codex_dir / f"{call_number:04d}-{kind}-response.json",
+            response,
+        )
         return response
 
     @staticmethod
@@ -589,18 +611,26 @@ class CampaignController:
         inspection_bytes = iteration.get("inspection_bytes", 0)
         correction_attempts = iteration.get("correction_attempts", 0)
         while True:
-            if self.state["counters"]["consecutive_model_failures"] >= 3:
-                self.state["stop_reason"] = "three_consecutive_model_failures"
-                return None
             response = self._model_call(messages, iteration_dir, "action")
             if response is None:
-                if self.state["stop_reason"]:
+                correction_attempts += 1
+                iteration["correction_attempts"] = correction_attempts
+                if self.state.get("stop_reason") or correction_attempts > 2:
+                    iteration["error"] = (
+                        self.state.get("stop_reason") or "action transport failed")
+                    self._save()
                     return None
+                self._save()
                 continue
             try:
                 action = validate_action(response)
                 if iteration.get("requires_experiment") and action["action"] != "experiment":
                     raise ProtocolError("A patch correction must return an experiment action")
+                if (action["action"] == "finish"
+                        and self.state["best_ensemble_metrics"]["primary"]
+                        < self.state["target_primary"]):
+                    raise ProtocolError(
+                        "finish is not allowed before best primary reaches target_primary")
             except ProtocolError as exc:
                 self._record_failure()
                 correction_attempts += 1
@@ -661,6 +691,25 @@ class CampaignController:
             self._save()
             return action
 
+    @staticmethod
+    def _replacement_patch(worktree, source):
+        original = (Path(worktree) / "solution.py").read_text(encoding="utf-8")
+        if not source.endswith("\n"):
+            source += "\n"
+        diff_lines = difflib.unified_diff(
+            original.splitlines(keepends=True),
+            source.splitlines(keepends=True),
+            fromfile="a/solution.py",
+            tofile="b/solution.py",
+        )
+        patch_lines = ["diff --git a/solution.py b/solution.py\n"]
+        for line in diff_lines:
+            if line.endswith("\n"):
+                patch_lines.append(line)
+            else:
+                patch_lines.extend((line + "\n", "\\ No newline at end of file\n"))
+        return "".join(patch_lines)
+
     def _obtain_proposal(self, iteration):
         number = iteration["number"]
         iteration_dir = self.store.iteration_dir(number)
@@ -680,9 +729,11 @@ class CampaignController:
                 self.sandbox.remove_worktree(number)
                 self._record_success()
                 return None
-            self.store.write_text(iteration_dir / "proposal.patch", action["patch"])
+            self.store.write_text(iteration_dir / "proposal.py", action["source"])
+            patch = self._replacement_patch(worktree, action["source"])
+            self.store.write_text(iteration_dir / "proposal.patch", patch)
             try:
-                commit = self.sandbox.apply_and_commit(number, action["patch"])
+                commit = self.sandbox.apply_and_commit(number, patch)
             except SandboxError as exc:
                 self._record_failure()
                 attempts = iteration.get("patch_correction_attempts", 0) + 1
@@ -696,10 +747,10 @@ class CampaignController:
                 messages = iteration["messages"] + [
                     {"role": "assistant", "content": json.dumps(action, sort_keys=True)},
                     {"role": "user", "content": (
-                        f"Patch validation error: {exc}. Return a new corrected experiment action. "
-                        "Do not repeat the invalid patch or inspect. Use a small complete git diff "
-                        "for solution.py; include diff --git and ---/+++ headers, correct context, "
-                        "and a plus/minus/space prefix on every hunk line. Do not use ellipses."
+                        f"Source validation error: {exc}. Return a new corrected experiment action. "
+                        "Do not repeat the invalid source or inspect. Return the complete corrected "
+                        "solution.py in the source field with no Markdown, diff, commentary, TODO, "
+                        "placeholder, or ellipsis."
                     )},
                 ]
                 iteration["messages"] = messages
@@ -713,6 +764,129 @@ class CampaignController:
             iteration["error"] = None
             self._record_success()
             return worktree
+
+    @staticmethod
+    def _tail_text(path, limit=MAX_FAILURE_FEEDBACK_BYTES):
+        path = Path(path)
+        if not path.is_file():
+            return ""
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            if size > limit:
+                handle.seek(-limit, os.SEEK_END)
+            value = handle.read().decode("utf-8", "replace")
+        if size > limit:
+            return "[earlier output trimmed]\n" + value
+        return value
+
+    def _candidate_failure_feedback(self, iteration, seed, result):
+        iteration_dir = self.store.iteration_dir(iteration["number"])
+        stdout = iteration_dir / ("stdout.log" if seed == 0 else f"stdout-seed-{seed}.log")
+        stderr = iteration_dir / ("stderr.log" if seed == 0 else f"stderr-seed-{seed}.log")
+        return {
+            "seed": seed,
+            "result": _plain(result),
+            "stdout_tail": self._tail_text(stdout),
+            "stderr_tail": self._tail_text(stderr),
+        }
+
+    @staticmethod
+    def _source_context(worktree):
+        source = (Path(worktree) / "solution.py").read_text(encoding="utf-8")
+        encoded = source.encode("utf-8")
+        if len(encoded) <= MAX_SOURCE_CONTEXT_BYTES:
+            return source
+        return (
+            encoded[:MAX_SOURCE_CONTEXT_BYTES].decode("utf-8", "ignore")
+            + "\n# [source context truncated]\n"
+        )
+
+    def _repair_failed_candidate(self, iteration, worktree, seed, result):
+        repairs = iteration.setdefault("repair_history", [])
+        if len(repairs) >= MAX_CANDIDATE_REPAIRS:
+            iteration["error"] = (
+                f"candidate still failed after {MAX_CANDIDATE_REPAIRS} repair attempts")
+            self._save()
+            return False
+        repair_number = len(repairs) + 1
+        previous_action = dict(iteration["action"])
+        previous_commit = iteration["candidate_commit"]
+        feedback = self._candidate_failure_feedback(iteration, seed, result)
+        record = {
+            "number": repair_number,
+            "status": "requested",
+            "failed_commit": previous_commit,
+            "failure": feedback,
+            "errors": [],
+        }
+        repairs.append(record)
+        iteration["failure_feedback"] = feedback
+        self._save()
+        messages = [
+            {"role": "system", "content": json.dumps(self._system_context(), sort_keys=True)},
+            {"role": "user", "content": json.dumps(build_repair_prompt(
+                previous_action=previous_action,
+                previous_source=self._source_context(worktree),
+                failure=feedback,
+                repair_attempt=repair_number,
+            ), sort_keys=True)},
+        ]
+        corrections = 0
+        iteration_dir = self.store.iteration_dir(iteration["number"])
+        while corrections <= 2:
+            response = self._model_call(
+                messages, iteration_dir, f"repair-{repair_number}")
+            if response is None:
+                if self.state.get("stop_reason"):
+                    record["status"] = "failed"
+                    self._save()
+                    return False
+                corrections += 1
+                continue
+            try:
+                action = validate_action(response)
+                if action["action"] != "experiment":
+                    raise ProtocolError("A candidate repair must return an experiment action")
+                if action["name"] != previous_action["name"]:
+                    raise ProtocolError(
+                        "A candidate repair must keep the original experiment name")
+                if action["hypothesis"] != previous_action["hypothesis"]:
+                    raise ProtocolError(
+                        "A candidate repair must keep the original hypothesis")
+                self.store.write_text(
+                    iteration_dir / f"repair-{repair_number}.py", action["source"])
+                patch = self._replacement_patch(worktree, action["source"])
+                self.store.write_text(
+                    iteration_dir / f"repair-{repair_number}.patch", patch)
+                commit = self.sandbox.apply_and_commit(iteration["number"], patch)
+            except (ProtocolError, SandboxError) as exc:
+                self._record_failure()
+                corrections += 1
+                record["errors"].append(str(exc))
+                messages.extend([
+                    {"role": "assistant", "content": json.dumps(response, sort_keys=True)},
+                    {"role": "user", "content": (
+                        f"Repair validation error: {exc}. Return complete corrected solution.py "
+                        "source against the same previous_source. Keep the exact original name "
+                        "and hypothesis. Do not repeat the invalid source."
+                    )},
+                ])
+                self._save()
+                continue
+            record.update({
+                "status": "applied",
+                "action": action,
+                "candidate_commit": commit,
+            })
+            iteration["action"] = action
+            iteration["candidate_commit"] = commit
+            iteration["error"] = None
+            self._record_success()
+            return True
+        record["status"] = "failed"
+        iteration["error"] = "candidate repair protocol failed"
+        self._save()
+        return False
 
     def _run_seed(self, iteration, worktree, seed):
         iteration_dir = self.store.iteration_dir(iteration["number"])
@@ -731,7 +905,8 @@ class CampaignController:
             "valid", seed, iteration["action"]["config"], output_dir, stdout, stderr,
             timeout=self.state["limits"]["run_timeout"],
             memory_gb=self.state["limits"]["memory_gb"],
-            threads=self.state["limits"]["threads"])
+            threads=self.state["limits"]["threads"],
+            candidate_data_dir=self.candidate_data_views["valid"])
         return result
 
     def _ensemble_metrics(self, iteration, seeds=(0, 1, 2)):
@@ -745,24 +920,40 @@ class CampaignController:
     def _execute_candidate(self, iteration, worktree):
         iteration["status"] = "running"
         iteration.setdefault("seed_results", {})
+        iteration.setdefault("repair_history", [])
         self._save()
-        seed_zero = self._run_seed(iteration, worktree, 0)
-        iteration["seed_results"]["0"] = seed_zero
-        confirmation = False
-        candidate_failed = seed_zero["status"] != "ok"
-        if not candidate_failed:
-            primary = seed_zero["metrics"]["primary"]
-            threshold = self.state["best_exploratory_primary"] + EPSILON
-            confirmation = primary > threshold
-            self.state["best_exploratory_primary"] = max(
-                self.state["best_exploratory_primary"], primary)
-        if confirmation:
-            for seed in (1, 2):
-                result = self._run_seed(iteration, worktree, seed)
-                iteration["seed_results"][str(seed)] = result
-                candidate_failed = candidate_failed or result["status"] != "ok"
+        while True:
+            iteration["seed_results"] = {}
+            iteration["ensemble_metrics"] = None
+            seed_zero = self._run_seed(iteration, worktree, 0)
+            iteration["seed_results"]["0"] = seed_zero
+            candidate_failed = seed_zero["status"] != "ok"
+            confirmation = False
+            primary = None
+            failed_seed = 0
+            failed_result = seed_zero
             if not candidate_failed:
-                iteration["ensemble_metrics"] = self._ensemble_metrics(iteration)
+                primary = seed_zero["metrics"]["primary"]
+                threshold = self.state["best_exploratory_primary"]
+                confirmation = primary > threshold
+            if confirmation:
+                for seed in (1, 2):
+                    result = self._run_seed(iteration, worktree, seed)
+                    iteration["seed_results"][str(seed)] = result
+                    if result["status"] != "ok":
+                        candidate_failed = True
+                        failed_seed = seed
+                        failed_result = result
+                        break
+                if not candidate_failed:
+                    iteration["ensemble_metrics"] = self._ensemble_metrics(iteration)
+            if candidate_failed and self._repair_failed_candidate(
+                    iteration, worktree, failed_seed, failed_result):
+                continue
+            if primary is not None:
+                self.state["best_exploratory_primary"] = max(
+                    self.state["best_exploratory_primary"], primary)
+            break
         iteration["confirmation_attempted"] = confirmation
         iteration["candidate_failed"] = candidate_failed
         iteration["status"] = "evaluated"
@@ -773,7 +964,8 @@ class CampaignController:
         return [
             {"role": "system", "content": (
                 "Return exactly one JSON object with diagnosis:string, evidence:list[string], "
-                "next_hypothesis:string, stop:boolean. Diagnose the executed experiment from evidence."
+                "next_hypothesis:string, stop:boolean. Diagnose only the supplied execution "
+                "evidence. Set stop=true only when the confirmed ensemble reached target_primary."
             )},
             {"role": "user", "content": json.dumps(_plain({
                 "hypothesis": iteration["action"]["hypothesis"],
@@ -781,6 +973,8 @@ class CampaignController:
                 "cumulative_diff_summary": self.sandbox.diff_summary(iteration["candidate_commit"]),
                 "seed_results": results,
                 "ensemble_metrics": iteration.get("ensemble_metrics"),
+                "failure_feedback": iteration.get("failure_feedback"),
+                "target_primary": self.state["target_primary"],
                 "delta_from_best": (
                     iteration.get("ensemble_metrics", {}).get("primary", float("-inf"))
                     - self.state["best_ensemble_metrics"]["primary"]
@@ -800,13 +994,13 @@ class CampaignController:
         iteration_dir = self.store.iteration_dir(iteration["number"])
         corrections = 0
         while True:
-            if self.state["counters"]["consecutive_model_failures"] >= 3:
-                self.state["stop_reason"] = "three_consecutive_model_failures"
-                iteration["error"] = "reflection protocol failed"
-                return False
             response = self._model_call(messages, iteration_dir, "reflection")
             if response is None:
-                if self.state["stop_reason"]:
+                corrections += 1
+                if self.state.get("stop_reason") or corrections > 2:
+                    iteration["reflection_error"] = (
+                        self.state.get("stop_reason") or "reflection transport failed")
+                    self._save()
                     return False
                 continue
             try:
@@ -819,7 +1013,8 @@ class CampaignController:
                     {"role": "user", "content": f"Reflection validation error: {exc}"},
                 ])
                 if corrections > 2:
-                    iteration["error"] = str(exc)
+                    iteration["reflection_error"] = str(exc)
+                    self._save()
                     return False
                 continue
             iteration["reflection"] = reflection
@@ -853,7 +1048,9 @@ class CampaignController:
             counters["consecutive_no_improvement"] = 0
         else:
             counters["consecutive_no_improvement"] += 1
-        if iteration.get("reflection", {}).get("stop"):
+        if (iteration.get("reflection", {}).get("stop")
+                and self.state["best_ensemble_metrics"]["primary"]
+                >= self.state["target_primary"]):
             self.state["stop_reason"] = "model_reflection_stop"
         self.sandbox.remove_worktree(iteration["number"])
         self._save()
@@ -872,17 +1069,27 @@ class CampaignController:
             status = "evaluated"
         if status == "evaluated":
             if not self._reflect(iteration):
-                iteration["status"] = "failed"
-                self.sandbox.remove_worktree(iteration["number"])
-                self.state["counters"]["completed_iterations"] += 1
-                self.state["counters"]["consecutive_no_improvement"] += 1
+                iteration["reflection"] = {
+                    "diagnosis": "Model reflection was unavailable; controller used execution evidence.",
+                    "evidence": [
+                        "Candidate acceptance is determined by trusted seed and ensemble metrics."
+                    ],
+                    "next_hypothesis": "Continue from the confirmed best candidate.",
+                    "stop": False,
+                }
+                iteration["status"] = "reflected"
                 self._save()
-                return
             status = "reflected"
         if status == "reflected":
             self._complete_iteration(iteration)
 
     def _policy_stop(self):
+        best = self.state.get("best_ensemble_metrics")
+        target = self.state.get("target_primary")
+        if best is not None and target is not None and best["primary"] >= target:
+            self.state["stop_reason"] = "target_primary_met"
+            self._save()
+            return True
         if self.state.get("stop_reason"):
             return True
         counters = self.state["counters"]
@@ -891,12 +1098,10 @@ class CampaignController:
             self.state["stop_reason"] = "max_iterations"
         elif self._elapsed() >= limits["max_hours"] * 3600:
             self.state["stop_reason"] = "max_hours"
-        elif counters["api_calls"] >= limits["max_api_calls"]:
-            self.state["stop_reason"] = "max_api_calls"
+        elif counters["model_calls"] >= limits["max_model_calls"]:
+            self.state["stop_reason"] = "max_model_calls"
         elif counters["consecutive_no_improvement"] >= 3:
             self.state["stop_reason"] = "three_consecutive_no_improvement"
-        elif counters["consecutive_model_failures"] >= 3:
-            self.state["stop_reason"] = "three_consecutive_model_failures"
         if self.state.get("stop_reason"):
             self._save()
             return True
@@ -940,7 +1145,8 @@ class CampaignController:
                     final_dir / f"valid-{seed}.stdout.log", final_dir / f"valid-{seed}.stderr.log",
                     timeout=self.state["limits"]["run_timeout"],
                     memory_gb=self.state["limits"]["memory_gb"],
-                    threads=self.state["limits"]["threads"])
+                    threads=self.state["limits"]["threads"],
+                    candidate_data_dir=self.candidate_data_views["valid"])
                 regenerated.append(result)
             hashes_match = all(
                 result["status"] == "ok"
@@ -986,7 +1192,8 @@ class CampaignController:
                     final_dir / f"test-{seed}.stdout.log", final_dir / f"test-{seed}.stderr.log",
                     timeout=self.state["limits"]["run_timeout"],
                     memory_gb=self.state["limits"]["memory_gb"],
-                    threads=self.state["limits"]["threads"])
+                    threads=self.state["limits"]["threads"],
+                    candidate_data_dir=self.candidate_data_views["test"])
                 if result["status"] != "ok":
                     raise CampaignStateError(f"Final test seed {seed} failed: {result['error']}")
                 test_results.append(result)
@@ -1009,7 +1216,7 @@ class CampaignController:
             if check_outcome["returncode"] != 0 or check_outcome["timed_out"]:
                 raise CampaignStateError("Final submit.py --check failed")
             budget_exhausted = self.state["stop_reason"] in {
-                "max_iterations", "max_hours", "max_api_calls",
+                "max_iterations", "max_hours", "max_model_calls",
             }
             final_status = ("target_met"
                             if not budget_exhausted
@@ -1055,7 +1262,7 @@ def format_status(state):
         f"best_primary: {best_primary if best_primary is not None else 'pending'}",
         f"delta_from_baseline: {delta if delta is not None else 'pending'}",
         f"target_primary: {state.get('target_primary')}",
-        f"api_calls: {state['counters']['api_calls']}",
+        f"model_calls: {state['counters']['model_calls']}",
         f"completed_iterations: {state['counters']['completed_iterations']}",
         f"current_iteration: {current['number'] if current else 'none'}",
         f"stop_reason: {state.get('stop_reason')}",
@@ -1067,11 +1274,27 @@ def _limits_from_args(args):
     return {
         "max_iterations": args.max_iterations,
         "max_hours": args.max_hours,
-        "max_api_calls": args.max_api_calls,
+        "max_model_calls": args.max_model_calls,
         "run_timeout": args.run_timeout,
         "memory_gb": args.memory_gb,
         "threads": args.threads,
     }
+
+def _positive_int(value):
+    try:
+        result = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a positive integer") from None
+    if result <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return result
+
+
+def _add_codex_arguments(command_parser):
+    command_parser.add_argument("--model", required=True)
+    command_parser.add_argument("--codex-bin", default="codex")
+    command_parser.add_argument("--codex-prefix-arg", action="append", default=[])
+    command_parser.add_argument("--codex-timeout", type=_positive_int, default=900)
 
 
 def main(argv=None):
@@ -1083,17 +1306,15 @@ def main(argv=None):
     run_parser.add_argument("--data_dir", required=True)
     run_parser.add_argument("--max-iterations", type=int, default=12)
     run_parser.add_argument("--max-hours", type=float, default=4)
-    run_parser.add_argument("--max-api-calls", type=int, default=60)
+    run_parser.add_argument("--max-model-calls", type=int, default=60)
     run_parser.add_argument("--run-timeout", type=int, default=900)
     run_parser.add_argument("--memory-gb", type=float, default=8)
     run_parser.add_argument("--threads", type=int, default=4)
-    run_parser.add_argument("--api-base")
-    run_parser.add_argument("--api-model")
+    _add_codex_arguments(run_parser)
 
     resume_parser = subparsers.add_parser("resume")
     resume_parser.add_argument("--campaign", required=True)
-    resume_parser.add_argument("--api-base")
-    resume_parser.add_argument("--api-model")
+    _add_codex_arguments(resume_parser)
 
     status_parser = subparsers.add_parser("status")
     status_parser.add_argument("--campaign", required=True)
@@ -1105,7 +1326,12 @@ def main(argv=None):
         if args.command == "status":
             print(format_status(store.load()))
             return 0
-        client = client_from_environment(args.api_base, args.api_model)
+        client = CodexCLIClient(
+            args.codex_bin,
+            args.model,
+            prefix_args=args.codex_prefix_arg,
+            timeout_seconds=args.codex_timeout,
+        )
         sandbox = WorktreeSandbox(repo_root, store.campaign_dir, args.campaign,
                                   python_executable=sys.executable)
         controller = CampaignController(client, sandbox, store)

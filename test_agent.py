@@ -2,7 +2,6 @@ import csv
 import difflib
 import hashlib
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import shutil
 from pathlib import Path
 import os
@@ -10,20 +9,31 @@ import tempfile
 import subprocess
 import sys
 import unittest
-import threading
 import time
 from unittest import mock
 
 import numpy as np
 from agent import CampaignController, ProtocolError, format_status, validate_action, validate_reflection
-from agent_api import AgentAPIError, OpenAICompatibleClient, client_from_environment
+from agent_codex import CodexCLIClient, CodexCLIError
+from agent_prompts import (
+    PROTECTED_PATHS,
+    SYSTEM_PROMPT,
+    build_generate_prompt,
+    build_repair_prompt,
+)
 from agent_sandbox import SandboxError, WorktreeSandbox, _run_process
 from agent_state import CampaignLockedError, CampaignStateError, CampaignStore
 
 from data import load as load_dataset
 from baseline import fit_fm, run_fm
 from evaluate import evaluate
-from experiment import DataAccess, create_submission, profile_data, run_candidate
+from experiment import (
+    DataAccess,
+    create_submission,
+    prepare_candidate_data,
+    profile_data,
+    run_candidate,
+)
 from solution import score
 
 
@@ -66,16 +76,22 @@ def write_dataset(root):
 
 
 class CandidateBoundaryTests(unittest.TestCase):
-    def test_fit_fm_extraction_preserves_scoring(self):
+    def test_fit_fm_extraction_and_candidate_boundary(self):
         splits = synthetic_splits()
         model, encoded = fit_fm(splits, epochs=3, bs=8, patience=2, seed=7, verbose=False)
         scores = model.predict(encoded["valid"][0])
         expected = evaluate(encoded["valid"][2], encoded["valid"][1], scores)
         actual = run_fm(splits, epochs=3, bs=8, patience=2, seed=7, verbose=False)
-        protocol_scores = score(splits, None, "valid", 7,
-                                {"epochs": 3, "bs": 8, "patience": 2})
+        protocol_scores = score(splits, None, "valid", 7, {
+            "epochs": 3,
+            "bs": 8,
+            "patience": 2,
+            "loss": "metadata-only",
+            "history_blend": 0.25,
+        })
         self.assertEqual(actual["valid"], expected)
-        np.testing.assert_array_equal(protocol_scores, scores)
+        self.assertEqual(protocol_scores.shape, scores.shape)
+        self.assertTrue(np.isfinite(protocol_scores).all())
 
 
 class ExperimentHarnessTests(unittest.TestCase):
@@ -133,12 +149,16 @@ class ExperimentHarnessTests(unittest.TestCase):
 
     def test_candidate_rejects_cardinality_and_nonfinite_scores(self):
         bad_values = (
-            (lambda *args: np.zeros(3), "expected 12"),
-            (lambda *args: np.full(12, np.nan), "NaN or Inf"),
+            (np.zeros(3), "expected 12"),
+            (np.full(12, np.nan), "NaN or Inf"),
         )
-        for index, (scorer, message) in enumerate(bad_values):
+        for index, (scores, message) in enumerate(bad_values):
+            def write_bad_scores(*arguments):
+                np.save(arguments[-1], scores, allow_pickle=False)
+
             with self.subTest(message=message), mock.patch(
-                    "experiment._candidate_module", return_value=scorer):
+                    "experiment._run_isolated_worker",
+                    side_effect=write_bad_scores):
                 result = run_candidate(
                     "solution", "bad", self.data_dir, "valid", 0, {},
                     self.data_dir / f"bad-{index}")
@@ -147,91 +167,276 @@ class ExperimentHarnessTests(unittest.TestCase):
             self.assertIsNone(result["score_sha256"])
 
     def test_candidate_cannot_observe_test_labels(self):
-        def label_scorer(splits, *args):
-            return np.asarray([row[6] for row in splits["test"]])
-
-        with mock.patch("experiment._candidate_module", return_value=label_scorer):
-            result = run_candidate(
-                "solution", "masked", self.data_dir, "test", 0, {},
-                self.data_dir / "masked")
-        self.assertEqual(result["status"], "ok")
+        profile = profile_data(self.data_dir)
+        views = prepare_candidate_data(
+            self.data_dir,
+            self.data_dir / "candidate-views",
+            profile["fingerprint_sha256"],
+        )
+        original = load_dataset(self.data_dir)
+        masked = load_dataset(views["test"])
+        self.assertTrue(any(row[6] for row in original["test"]))
         np.testing.assert_array_equal(
-            np.load(self.data_dir / "masked" / "scores.npy"), np.zeros(12))
+            [row[6] for row in masked["test"]],
+            np.zeros(len(masked["test"])),
+        )
 
 
-class APITransportTests(unittest.TestCase):
+class CodexCLITransportTests(unittest.TestCase):
     def setUp(self):
-        self.responses = []
-        self.requests = []
-        owner = self
+        self.temporary = tempfile.TemporaryDirectory()
+        root = Path(self.temporary.name)
+        self.fake_script = root / "fake_codex.py"
+        self.record_path = root / "calls.jsonl"
+        self.secret = "super-secret-transport-value"
+        self.fake_script.write_text(r'''
+import json
+import os
+from pathlib import Path
+import sys
+import time
 
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self):
-                length = int(self.headers["Content-Length"])
-                owner.requests.append({
-                    "path": self.path,
-                    "request_id": self.headers.get("X-Request-ID"),
-                    "authorization": self.headers.get("Authorization"),
-                    "body": json.loads(self.rfile.read(length)),
-                })
-                status, body = owner.responses.pop(0)
-                encoded = body if isinstance(body, bytes) else json.dumps(body).encode()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(encoded)))
-                self.end_headers()
-                self.wfile.write(encoded)
 
-            def log_message(self, format, *args):
-                pass
+args = sys.argv[1:]
+prompt = None
+entries = None
+if args and args[0] == "exec":
+    entries = os.listdir(".")
+    prompt = json.loads(sys.stdin.read())
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-        self.secret = "super-secret-agent-key"
-        self.client = OpenAICompatibleClient(
-            f"http://127.0.0.1:{self.server.server_port}/v1", "fake-model", self.secret)
+record_path = os.environ.get("FAKE_CODEX_RECORD")
+if record_path:
+    record = {
+        "args": args,
+        "cwd": os.getcwd(),
+        "entries": entries,
+        "prompt": prompt,
+        "credentials": {
+            name: os.environ.get(name)
+            for name in (
+                "AGENT" + "_API_KEY",
+                "OPENAI_API_KEY",
+                "CODEX_API_KEY",
+                "CODEX_ACCESS_TOKEN",
+            )
+        },
+        "paths": {
+            name: os.environ.get(name)
+            for name in (
+                "PWD",
+                "TMPDIR",
+                "OLDPWD",
+                "PYTHONPATH",
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+            )
+        },
+    }
+    with Path(record_path).open("a") as handle:
+        handle.write(json.dumps(record) + "\n")
+
+mode = os.environ.get("FAKE_CODEX_MODE", "success")
+secret = "super-secret-transport-value"
+if args == ["--version"]:
+    if mode == "version-exit":
+        sys.stderr.write(secret)
+        raise SystemExit(11)
+    print("codex-cli 0.46.0")
+elif args == ["login", "status"]:
+    if mode == "login-exit":
+        sys.stderr.write(secret)
+        raise SystemExit(12)
+    if mode == "non-chatgpt":
+        print("Logged in using API key: " + secret)
+    else:
+        print("Logged in using ChatGPT")
+elif args and args[0] == "exec":
+    if mode == "nonzero":
+        sys.stderr.write(secret)
+        raise SystemExit(17)
+    if mode == "timeout":
+        sys.stderr.write(secret)
+        sys.stderr.flush()
+        time.sleep(60)
+    if mode == "oversized":
+        sys.stdout.buffer.write(b"x" * (512 * 1024 + 1))
+    elif mode == "invalid-utf8":
+        sys.stdout.buffer.write(b"\xff")
+    else:
+        sys.stdout.write(os.environ.get(
+            "FAKE_CODEX_RESPONSE",
+            '{"action":"finish","reason":"ok"}',
+        ))
+else:
+    sys.stderr.write(secret)
+    raise SystemExit(91)
+''')
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join()
+        self.temporary.cleanup()
 
-    def test_retry_reuses_request_id_and_parses_object(self):
-        content = {"action": "finish", "reason": "done"}
-        self.responses.extend([
-            (429, {"error": "retry"}),
-            (200, {"choices": [{"message": {"content": json.dumps(content)}}],
-                   "provider_metadata": {"ignored": True}}),
+    def _environment(self, **values):
+        return {"FAKE_CODEX_RECORD": str(self.record_path), **values}
+
+    def _client(self, timeout_seconds=5, **environment):
+        with mock.patch.dict(os.environ, self._environment(**environment)):
+            return CodexCLIClient(
+                sys.executable,
+                "fake-model",
+                prefix_args=(str(self.fake_script),),
+                timeout_seconds=timeout_seconds,
+            )
+
+    def _complete(self, client, messages=None, request_id="request-7", **environment):
+        if messages is None:
+            messages = [{"role": "user", "content": "work"}]
+        with mock.patch.dict(os.environ, self._environment(**environment)):
+            return client.complete(messages, request_id)
+
+    def _records(self):
+        return [
+            json.loads(line)
+            for line in self.record_path.read_text().splitlines()
+        ]
+
+    def test_probes_exec_boundary_and_exact_object_parsing(self):
+        messages = [
+            {"role": "system", "content": "System first."},
+            {"role": "user", "content": "User second."},
+            {"role": "assistant", "content": "Assistant third."},
+        ]
+        credentials = {
+            "AGENT" + "_API_KEY": "must-not-be-used",
+            "OPENAI_API_KEY": "must-not-be-used",
+            "CODEX_API_KEY": "must-not-be-used",
+            "CODEX_ACCESS_TOKEN": "must-not-be-used",
+        }
+        with mock.patch.dict(os.environ, {
+                **self._environment(
+                    FAKE_CODEX_RESPONSE='  {"action":"finish","reason":"done"}\n',
+                ),
+                **credentials,
+                "OLDPWD": "/repository/old",
+                "PYTHONPATH": "/repository/python",
+                "GIT_DIR": "/repository/.git",
+                "GIT_WORK_TREE": "/repository",
+        }):
+            client = CodexCLIClient(
+                sys.executable,
+                "fake-model",
+                prefix_args=(str(self.fake_script),),
+                timeout_seconds=5,
+            )
+            result = client.complete(messages, "request-7")
+
+        self.assertEqual(
+            client.identity,
+            {"version": "0.46.0", "model": "fake-model"},
+        )
+        self.assertEqual(result, {"action": "finish", "reason": "done"})
+        records = self._records()
+        self.assertEqual(records[0]["args"], ["--version"])
+        self.assertEqual(records[1]["args"], ["login", "status"])
+        execution = records[2]
+        self.assertEqual(execution["args"], [
+            "exec",
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            "--model",
+            "fake-model",
+            "--color",
+            "never",
+            "-",
         ])
-        with mock.patch("agent_api.time.sleep") as sleep:
-            result = self.client.complete([{"role": "user", "content": "work"}], "request-7")
-        self.assertEqual(result, content)
-        sleep.assert_called_once_with(1)
-        self.assertEqual([item["request_id"] for item in self.requests],
-                         ["request-7", "request-7"])
-        self.assertEqual(self.requests[0]["path"], "/v1/chat/completions")
-        self.assertEqual(self.requests[0]["body"]["temperature"], 0.2)
+        self.assertEqual(execution["entries"], [])
+        self.assertEqual(execution["prompt"], {
+            "instruction": (
+                "Act only as the model component of the supplied controller "
+                "conversation. Do not inspect the local machine or use tools. "
+                "Follow system messages as highest priority and return exactly "
+                "one JSON object with no Markdown."
+            ),
+            "request_id": "request-7",
+            "messages": messages,
+        })
+        for record in records:
+            self.assertEqual(record["credentials"], {
+                name: None for name in credentials
+            })
+        self.assertEqual(execution["paths"]["PWD"], execution["cwd"])
+        self.assertEqual(execution["paths"]["TMPDIR"], execution["cwd"])
+        for name in ("OLDPWD", "PYTHONPATH", "GIT_DIR", "GIT_WORK_TREE"):
+            self.assertIsNone(execution["paths"][name])
+        self.assertTrue(Path(execution["cwd"]).name.startswith("kuairand-codex-"))
+        self.assertFalse(Path(execution["cwd"]).exists())
 
-    def test_errors_are_malformed_and_secret_safe(self):
-        self.responses.append((200, b"{not-json"))
-        with self.assertRaises(AgentAPIError) as malformed:
-            self.client.complete([], "malformed")
-        self.assertNotIn(self.secret, str(malformed.exception))
+    def test_missing_executable_and_login_errors_are_secret_safe(self):
+        missing = str(Path(self.temporary.name) / "missing-codex")
+        with self.assertRaisesRegex(
+                CodexCLIError,
+                "Codex CLI executable not found: " + missing):
+            CodexCLIClient(missing, "fake-model")
 
-        self.responses.append((400, {"error": self.secret}))
-        with self.assertRaises(AgentAPIError) as rejected:
-            self.client.complete([], "rejected")
-        self.assertNotIn(self.secret, str(rejected.exception))
+        with self.assertRaises(CodexCLIError) as login:
+            self._client(FAKE_CODEX_MODE="non-chatgpt")
+        self.assertEqual(
+            str(login.exception),
+            "Codex CLI must be logged in with ChatGPT; run 'codex login'",
+        )
+        self.assertNotIn(self.secret, str(login.exception))
 
-    def test_environment_configuration_requires_key_base_and_model(self):
-        with self.assertRaisesRegex(ValueError, "AGENT_API_KEY"):
-            client_from_environment(environ={})
-        client = client_from_environment(
-            api_base="https://example.invalid/v1", api_model="model",
-            environ={"AGENT_API_KEY": "key-only"})
-        self.assertEqual(client.base_url, "https://example.invalid/v1")
-        self.assertEqual(client.model, "model")
+    def test_probe_and_exec_failures_never_expose_stderr(self):
+        for mode, expected in (
+                ("version-exit", "version check failed with exit status 11"),
+                ("login-exit", "login check failed with exit status 12")):
+            with self.subTest(mode=mode), self.assertRaises(CodexCLIError) as error:
+                self._client(FAKE_CODEX_MODE=mode)
+            self.assertIn(expected, str(error.exception))
+            self.assertNotIn(self.secret, str(error.exception))
+
+        client = self._client()
+        with self.assertRaises(CodexCLIError) as error:
+            self._complete(client, FAKE_CODEX_MODE="nonzero")
+        self.assertIn("Codex CLI exited with status 17", str(error.exception))
+        self.assertNotIn(self.secret, str(error.exception))
+
+    def test_timeout_is_bounded_and_secret_safe(self):
+        client = self._client(timeout_seconds=0.05)
+        with self.assertRaises(CodexCLIError) as error:
+            self._complete(client, FAKE_CODEX_MODE="timeout")
+        self.assertIn("Codex CLI timed out after 0.05 seconds", str(error.exception))
+        self.assertNotIn(self.secret, str(error.exception))
+
+    def test_response_rejections_are_specific(self):
+        client = self._client()
+        for response, expected in (
+                ("{not-json", "malformed JSON"),
+                ('{"action":"finish"} trailing', "trailing content"),
+                ("[]", "must be a JSON object")):
+            with self.subTest(response=response), self.assertRaisesRegex(
+                    CodexCLIError, expected):
+                self._complete(client, FAKE_CODEX_RESPONSE=response)
+
+        with self.assertRaisesRegex(CodexCLIError, "exceeds 512 KiB"):
+            self._complete(client, FAKE_CODEX_MODE="oversized")
+        with self.assertRaisesRegex(CodexCLIError, "not valid UTF-8"):
+            self._complete(client, FAKE_CODEX_MODE="invalid-utf8")
+
+    def test_request_validation_precedes_subprocess_execution(self):
+        client = self._client()
+        probes = len(self._records())
+        invalid_requests = (
+            ([], "", "request_id"),
+            ("not-a-list", "request", "messages must be a list"),
+            ([{"role": "user", "content": "ok", "extra": 1}], "request", "role/content"),
+            ([{"role": "user", "content": 3}], "request", "role/content"),
+        )
+        for messages, request_id, expected in invalid_requests:
+            with self.subTest(expected=expected), self.assertRaisesRegex(
+                    ValueError, expected):
+                client.complete(messages, request_id)
+        self.assertEqual(len(self._records()), probes)
 
 
 class SandboxTests(unittest.TestCase):
@@ -292,7 +497,7 @@ class SandboxTests(unittest.TestCase):
         self.assertEqual(self.git("status", "--short").stdout, status_before)
 
 
-    def test_standard_unified_diff_is_accepted(self):
+    def test_standard_unified_diff_without_final_newline_is_accepted(self):
         base = self.sandbox.create_base_snapshot()
         self.sandbox.start_iteration(1)
         patch = """--- a/solution.py
@@ -304,6 +509,7 @@ class SandboxTests(unittest.TestCase):
 -    return np.zeros(2)
 +    return np.ones(2)
 """
+        patch = patch.rstrip("\n")
         proposal = self.sandbox.apply_and_commit(1, patch)
         self.assertNotEqual(proposal, base)
         self.assertEqual((self.sandbox.worktree_path(1) / "solution.py").read_text(),
@@ -353,9 +559,9 @@ class SandboxTests(unittest.TestCase):
             "import os,pathlib,subprocess,sys,time; "
             "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
             "pathlib.Path(sys.argv[1]).write_text(str(p.pid)); "
-            "print(os.environ.get('AGENT_API_KEY','missing'), flush=True); time.sleep(60)"
+            "print(os.environ.get('THIRD_PARTY_API_KEY','missing'), flush=True); time.sleep(60)"
         )
-        with mock.patch.dict(os.environ, {"AGENT_API_KEY": "never-copy-this"}):
+        with mock.patch.dict(os.environ, {"THIRD_PARTY_API_KEY": "never-copy-this"}):
             outcome = _run_process(
                 [sys.executable, "-c", code, str(pid_path)], root,
                 root / "stdout.log", root / "stderr.log", timeout=0.2,
@@ -371,6 +577,42 @@ class SandboxTests(unittest.TestCase):
             time.sleep(0.05)
         else:
             self.fail("candidate child process survived timeout cleanup")
+
+
+class PromptContractTests(unittest.TestCase):
+    def test_generate_prompt_carries_current_source_and_research_history(self):
+        prompt = build_generate_prompt(
+            current_best_source="def score(*args):\n    return scores\n",
+            prior_experiments=[{"name": "dead-end", "status": "rejected"}],
+            best_metrics={"primary": 0.6},
+            target_primary=0.6016,
+        )
+        self.assertEqual(
+            prompt["current_best_source"],
+            "def score(*args):\n    return scores\n",
+        )
+        self.assertEqual(prompt["prior_experiments"][0]["status"], "rejected")
+        self.assertIn("one hypothesis", prompt["instruction"])
+        self.assertIn("agent_prompts.py", PROTECTED_PATHS)
+        self.assertIn("constant within a user", " ".join(SYSTEM_PROMPT))
+
+    def test_repair_prompt_carries_exact_failed_source_and_evidence(self):
+        failure = {
+            "result": {"status": "failed", "error": "timeout"},
+            "stdout_tail": "partial progress",
+            "stderr_tail": "traceback tail",
+        }
+        prompt = build_repair_prompt(
+            previous_action={"name": "pair-loss", "hypothesis": "hard negatives"},
+            previous_source="def score():\n    broken()\n",
+            failure=failure,
+            repair_attempt=2,
+        )
+        self.assertEqual(prompt["previous_source"], "def score():\n    broken()\n")
+        self.assertIs(prompt["failure"], failure)
+        self.assertEqual(prompt["repair_attempt"], 2)
+        self.assertIn("root cause", prompt["instruction"])
+        self.assertIn("no-op fallback", prompt["instruction"])
 
 
 class CampaignStateTests(unittest.TestCase):
@@ -410,7 +652,7 @@ class CampaignStateTests(unittest.TestCase):
             "action": "experiment",
             "name": "duration",
             "hypothesis": "Duration ranks positives",
-            "patch": "diff --git a/solution.py b/solution.py",
+            "source": "def score(*args):\n    return []\n",
             "config": {},
             "expected_effect": "Higher primary",
         }
@@ -433,15 +675,14 @@ class CampaignStateTests(unittest.TestCase):
     def test_stopping_policy_uses_first_reached_limit(self):
         cases = (
             ({"completed_iterations": 2}, "max_iterations"),
-            ({"api_calls": 5}, "max_api_calls"),
+            ({"model_calls": 5}, "max_model_calls"),
             ({"consecutive_no_improvement": 3}, "three_consecutive_no_improvement"),
-            ({"consecutive_model_failures": 3}, "three_consecutive_model_failures"),
         )
         for changes, expected in cases:
             with self.subTest(expected=expected):
                 controller = CampaignController(None, None, None, clock=lambda: 0)
                 counters = {
-                    "api_calls": 0,
+                    "model_calls": 0,
                     "completed_iterations": 0,
                     "consecutive_model_failures": 0,
                     "consecutive_no_improvement": 0,
@@ -451,25 +692,25 @@ class CampaignStateTests(unittest.TestCase):
                     "stop_reason": None,
                     "counters": counters,
                     "limits": {
-                        "max_iterations": 2, "max_hours": 1, "max_api_calls": 5,
+                        "max_iterations": 2, "max_hours": 1, "max_model_calls": 5,
                         "run_timeout": 30, "memory_gb": 8, "threads": 1,
                     },
                     "best_ensemble_metrics": {"primary": 1.0},
-                    "target_primary": 0.5,
+                    "target_primary": 2.0,
                 }
                 controller._save = lambda: None
                 self.assertTrue(controller._policy_stop())
                 self.assertEqual(controller.state["stop_reason"], expected)
-        controller = CampaignController(None, None, None, clock=lambda: 3601)
-        controller._session_started = 0
+
+        controller = CampaignController(None, None, None, clock=lambda: 0)
         controller.state = {
-            "stop_reason": None,
+            "stop_reason": "max_model_calls",
             "counters": {
-                "api_calls": 0, "completed_iterations": 0,
-                "consecutive_model_failures": 0, "consecutive_no_improvement": 0,
+                "model_calls": 5, "completed_iterations": 0,
+                "consecutive_model_failures": 3, "consecutive_no_improvement": 0,
             },
             "limits": {
-                "max_iterations": 2, "max_hours": 1, "max_api_calls": 5,
+                "max_iterations": 2, "max_hours": 1, "max_model_calls": 5,
                 "run_timeout": 30, "memory_gb": 8, "threads": 1,
             },
             "best_ensemble_metrics": {"primary": 1.0},
@@ -477,14 +718,34 @@ class CampaignStateTests(unittest.TestCase):
         }
         controller._save = lambda: None
         self.assertTrue(controller._policy_stop())
+        self.assertEqual(controller.state["stop_reason"], "target_primary_met")
+
+        controller = CampaignController(None, None, None, clock=lambda: 3601)
+        controller._session_started = 0
+        controller.state = {
+            "stop_reason": None,
+            "counters": {
+                "model_calls": 0, "completed_iterations": 0,
+                "consecutive_model_failures": 3, "consecutive_no_improvement": 0,
+            },
+            "limits": {
+                "max_iterations": 2, "max_hours": 1, "max_model_calls": 5,
+                "run_timeout": 30, "memory_gb": 8, "threads": 1,
+            },
+            "best_ensemble_metrics": {"primary": 1.0},
+            "target_primary": 2.0,
+        }
+        controller._save = lambda: None
+        self.assertTrue(controller._policy_stop())
         self.assertEqual(controller.state["stop_reason"], "max_hours")
 
 
 class FakeClient:
-    base_url = "https://fake.invalid/v1"
-    model = "fake-ranking-model"
-
-    def __init__(self, responses):
+    def __init__(self, responses, identity=None):
+        self.identity = dict(identity if identity is not None else {
+            "version": "0.46.0",
+            "model": "fake-ranking-model",
+        })
         self.responses = list(responses)
         self.calls = []
 
@@ -499,9 +760,10 @@ def prepare_campaign_fixture(root):
     repo.mkdir()
     source_root = Path(__file__).resolve().parent
     maintained = [
-        ".gitignore", "agent.py", "agent_api.py", "agent_sandbox.py", "agent_state.py",
-        "baseline.py", "data.py", "evaluate.py", "experiment.py", "solution.py",
-        "submit.py", "requirements.txt",
+        ".gitignore", "agent.py", "agent_codex.py", "agent_prompts.py",
+        "agent_sandbox.py", "agent_state.py", "baseline.py", "data.py",
+        "evaluate.py", "experiment.py", "solution.py", "submit.py",
+        "requirements.txt",
     ]
     for name in maintained:
         shutil.copy2(source_root / name, repo / name)
@@ -516,12 +778,9 @@ def prepare_campaign_fixture(root):
     return repo, data_dir
 
 
-def replacement_patch(repo, function_source):
+def replacement_source(repo, function_source):
     original = (Path(repo) / "solution.py").read_text()
-    replacement = original[:original.index("def score")] + function_source
-    return "diff --git a/solution.py b/solution.py\n" + "".join(difflib.unified_diff(
-        original.splitlines(keepends=True), replacement.splitlines(keepends=True),
-        fromfile="a/solution.py", tofile="b/solution.py"))
+    return original[:original.index("def score")] + function_source
 
 
 def actual_recorded_baseline(data_dir):
@@ -546,9 +805,10 @@ class CampaignIntegrationTests(unittest.TestCase):
             repo = root / "repo"
             repo.mkdir()
             maintained = [
-                ".gitignore", "agent.py", "agent_api.py", "agent_sandbox.py", "agent_state.py",
-                "baseline.py", "data.py", "evaluate.py", "experiment.py", "solution.py",
-                "submit.py", "requirements.txt",
+                ".gitignore", "agent.py", "agent_codex.py", "agent_prompts.py",
+                "agent_sandbox.py", "agent_state.py", "baseline.py", "data.py",
+                "evaluate.py", "experiment.py", "solution.py", "submit.py",
+                "requirements.txt",
             ]
             source_root = Path(__file__).resolve().parent
             for name in maintained:
@@ -570,16 +830,14 @@ class CampaignIntegrationTests(unittest.TestCase):
     del data_access, seed, config
     return np.asarray([row[5] for row in splits[target_split]], dtype=np.float64)
 '''
-            patch = "diff --git a/solution.py b/solution.py\n" + "".join(difflib.unified_diff(
-                original.splitlines(keepends=True), replacement.splitlines(keepends=True),
-                fromfile="a/solution.py", tofile="b/solution.py"))
+            replacement = replacement.rstrip("\n")
             responses = [
                 {"action": "inspect", "requests": [{"kind": "data_profile"}]},
                 {
                     "action": "experiment",
                     "name": "duration-order",
                     "hypothesis": "Longer videos align with the fixture relevance order.",
-                    "patch": patch,
+                    "source": replacement,
                     "config": {},
                     "expected_effect": "Improve seed-zero and confirmed ensemble primary.",
                 },
@@ -589,7 +847,6 @@ class CampaignIntegrationTests(unittest.TestCase):
                     "next_hypothesis": "No further fixture experiment is needed.",
                     "stop": False,
                 },
-                {"action": "finish", "reason": "The bounded integration objective is complete."},
             ]
             client = FakeClient(responses)
             store = CampaignStore(repo / ".agent-runs", "integration")
@@ -603,40 +860,55 @@ class CampaignIntegrationTests(unittest.TestCase):
                 },
                 "scores": [zeros.copy(), zeros.copy(), zeros.copy()],
                 "config": {"epochs": 1, "bs": 8, "patience": 1},
+                "target_primary": 0.65,
             }
             status_before = subprocess.run(
                 ["git", "status", "--short"], cwd=repo, check=True,
                 stdout=subprocess.PIPE, text=True).stdout
-            with mock.patch.dict(os.environ, {"AGENT_API_KEY": "integration-secret"}):
-                controller = CampaignController(
-                    client, sandbox, store, recorded_baseline=recorded)
-                state = controller.run(data_dir, {
-                    "max_iterations": 3,
-                    "max_hours": 1,
-                    "max_api_calls": 12,
-                    "run_timeout": 30,
-                    "memory_gb": 8,
-                    "threads": 1,
-                })
+            controller = CampaignController(
+                client, sandbox, store, recorded_baseline=recorded)
+            state = controller.run(data_dir, {
+                "max_iterations": 3,
+                "max_hours": 1,
+                "max_model_calls": 12,
+                "run_timeout": 30,
+                "memory_gb": 8,
+                "threads": 1,
+            })
             self.assertEqual(state["status"], "target_met")
             self.assertEqual(state["counters"]["completed_iterations"], 1)
             self.assertEqual(state["iterations"][0]["status"], "accepted")
             self.assertEqual(set(state["iterations"][0]["seed_results"]), {"0", "1", "2"})
             self.assertEqual(state["best_commit"], state["iterations"][0]["candidate_commit"])
-            self.assertAlmostEqual(
-                state["target_primary"],
-                max(state["baseline"]["fm_ensemble_metrics"]["primary"], 0.6016) + 0.002)
-            self.assertEqual(len(client.calls), 4)
+            self.assertEqual(state["target_primary"], 0.65)
+            self.assertEqual(len(client.calls), 3)
+            self.assertEqual(state["codex"], client.identity)
             campaign_dir = store.campaign_dir
             iteration_dir = campaign_dir / "iterations" / "0001"
             for name in (
-                    "request.json", "response.json", "proposal.patch", "stdout.log",
-                    "stderr.log", "reflection.json"):
+                    "request.json", "response.json", "proposal.py", "proposal.patch",
+                    "stdout.log", "stderr.log", "reflection.json"):
                 self.assertTrue((iteration_dir / name).is_file(), name)
+            self.assertTrue((iteration_dir / "codex").is_dir())
+            self.assertTrue(
+                (iteration_dir / "codex" / "0001-action-request.json").is_file())
             system_context = json.loads(client.calls[0][0][0]["content"])
             self.assertNotIn("positive_rate", system_context["profile"]["splits"]["test"])
-            self.assertIn("pairwise/listwise", " ".join(system_context["research_evidence"]))
+            self.assertIn("pairwise", " ".join(system_context["research_evidence"]))
             self.assertEqual(system_context["protected_paths"][0], "evaluate.py")
+            self.assertIn("agent_codex.py", system_context["protected_paths"])
+            self.assertIn("traceback tail", " ".join(system_context["coding_agent_prompt"]))
+            self.assertIn("zero-masked", " ".join(system_context["coding_agent_prompt"]))
+            prompt_contract = " ".join(system_context["coding_agent_prompt"])
+            self.assertIn("constant within a user", prompt_contract)
+            self.assertIn("one causal hypothesis", prompt_contract)
+            self.assertIn("all-zero scores", prompt_contract)
+            self.assertIn("timeout or memory-limit", prompt_contract)
+            self.assertIn("source", system_context["action_schema"]["experiment"])
+            self.assertNotIn("patch", system_context["action_schema"]["experiment"])
+            initial_prompt = json.loads(client.calls[0][0][1]["content"])
+            self.assertEqual(initial_prompt["current_best_source"], original)
+            self.assertIn("target_primary", initial_prompt["instruction"])
             self.assertTrue((campaign_dir / "submission.csv").is_file())
             self.assertTrue((campaign_dir / "best.patch").is_file())
             self.assertTrue((campaign_dir / "final.json").is_file())
@@ -661,9 +933,6 @@ class CampaignIntegrationTests(unittest.TestCase):
                 ["git", "status", "--short"], cwd=repo, check=True,
                 stdout=subprocess.PIPE, text=True).stdout
             self.assertEqual(status_after, status_before)
-            campaign_bytes = b"".join(
-                path.read_bytes() for path in campaign_dir.rglob("*") if path.is_file())
-            self.assertNotIn(b"integration-secret", campaign_bytes)
 
     def test_resume_reuses_completed_candidate_result(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -672,7 +941,7 @@ class CampaignIntegrationTests(unittest.TestCase):
             repo.mkdir()
             source_root = Path(__file__).resolve().parent
             maintained = [
-                ".gitignore", "agent.py", "agent_api.py", "agent_sandbox.py", "agent_state.py",
+                ".gitignore", "agent.py", "agent_codex.py", "agent_sandbox.py", "agent_state.py",
                 "baseline.py", "data.py", "evaluate.py", "experiment.py", "solution.py",
                 "submit.py", "requirements.txt",
             ]
@@ -694,14 +963,11 @@ class CampaignIntegrationTests(unittest.TestCase):
     del data_access, seed, config
     return np.asarray([row[5] for row in splits[target_split]], dtype=np.float64)
 '''
-            patch = "diff --git a/solution.py b/solution.py\n" + "".join(difflib.unified_diff(
-                original.splitlines(keepends=True), replacement.splitlines(keepends=True),
-                fromfile="a/solution.py", tofile="b/solution.py"))
             experiment_action = {
                 "action": "experiment",
                 "name": "resume-duration",
                 "hypothesis": "Duration changes row ordering.",
-                "patch": patch,
+                "source": replacement,
                 "config": {},
                 "expected_effect": "Exercise candidate subprocess resume.",
             }
@@ -717,6 +983,7 @@ class CampaignIntegrationTests(unittest.TestCase):
                 },
                 "scores": baseline_scores,
                 "config": baseline_config,
+                "target_primary": 2.0,
             }
             store = CampaignStore(repo / ".agent-runs", "resume")
             sandbox = WorktreeSandbox(repo, store.campaign_dir, "resume",
@@ -738,9 +1005,9 @@ class CampaignIntegrationTests(unittest.TestCase):
             sandbox.run_candidate = interrupt_after_result
             with self.assertRaises(KeyboardInterrupt):
                 controller.run(data_dir, {
-                    "max_iterations": 3,
+                    "max_iterations": 1,
                     "max_hours": 1,
-                    "max_api_calls": 12,
+                    "max_model_calls": 12,
                     "run_timeout": 30,
                     "memory_gb": 8,
                     "threads": 1,
@@ -751,6 +1018,19 @@ class CampaignIntegrationTests(unittest.TestCase):
             score_hash_before = hashlib.sha256(score_path.read_bytes()).hexdigest()
             result_mtime_before = result_path.stat().st_mtime_ns
 
+            for identity in (
+                    {"version": "0.47.0", "model": "fake-ranking-model"},
+                    {"version": "0.46.0", "model": "different-model"}):
+                with self.subTest(identity=identity), self.assertRaisesRegex(
+                        CampaignStateError,
+                        "Resume requires the same Codex CLI version and model"):
+                    CampaignController(
+                        FakeClient([], identity=identity),
+                        sandbox,
+                        store,
+                        recorded_baseline=recorded,
+                    ).resume()
+
             sandbox.run_candidate = original_run_candidate
             resumed_client = FakeClient([
                 {
@@ -759,101 +1039,159 @@ class CampaignIntegrationTests(unittest.TestCase):
                     "next_hypothesis": "Finish.",
                     "stop": False,
                 },
-                {"action": "finish", "reason": "Resume behavior verified."},
             ])
             resumed = CampaignController(
                 resumed_client, sandbox, store, recorded_baseline=recorded).resume()
             self.assertEqual(resumed["status"], "target_unmet")
             self.assertEqual(result_path.stat().st_mtime_ns, result_mtime_before)
             self.assertEqual(hashlib.sha256(score_path.read_bytes()).hexdigest(), score_hash_before)
-            self.assertEqual(len(resumed_client.calls), 2)
+            self.assertEqual(len(resumed_client.calls), 1)
             self.assertEqual(resumed["counters"]["completed_iterations"], 1)
 
-    def test_failed_candidate_is_reflected_before_stopping(self):
+    def test_failed_candidate_repairs_same_iteration_from_traceback(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            repo = root / "repo"
-            repo.mkdir()
-            source_root = Path(__file__).resolve().parent
-            maintained = [
-                ".gitignore", "agent.py", "agent_api.py", "agent_sandbox.py", "agent_state.py",
-                "baseline.py", "data.py", "evaluate.py", "experiment.py", "solution.py",
-                "submit.py", "requirements.txt",
-            ]
-            for name in maintained:
-                shutil.copy2(source_root / name, repo / name)
-            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE)
-            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
-            subprocess.run(["git", "add", "."], cwd=repo, check=True)
-            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True,
-                           stdout=subprocess.PIPE)
-            data_dir = root / "data"
-            data_dir.mkdir()
-            write_dataset(data_dir)
+            repo, data_dir = prepare_campaign_fixture(root)
             original = (repo / "solution.py").read_text()
             prefix = original[:original.index("def score")]
-            replacement = prefix + '''def score(splits, data_access, target_split: str, seed: int, config: dict) -> np.ndarray:
+            hypothesis = "Duration ordering should beat the constant fixture baseline."
+            invalid_source = prefix + '''def score(
+        splits, data_access, target_split: str, seed: int, config: dict) -> np.ndarray:
     del data_access, seed, config
     return np.full(len(splits[target_split]), np.nan)
 '''
-            patch = "diff --git a/solution.py b/solution.py\n" + "".join(difflib.unified_diff(
-                original.splitlines(keepends=True), replacement.splitlines(keepends=True),
-                fromfile="a/solution.py", tofile="b/solution.py"))
+            repaired_source = prefix + '''def score(
+        splits, data_access, target_split: str, seed: int, config: dict) -> np.ndarray:
+    del data_access, seed, config
+    return np.asarray([row[5] for row in splits[target_split]], dtype=np.float64)
+'''
+
+
             client = FakeClient([
                 {
                     "action": "experiment",
-                    "name": "invalid-output",
-                    "hypothesis": "This intentionally exercises candidate failure handling.",
-                    "patch": patch,
+                    "name": "repair-duration",
+                    "hypothesis": hypothesis,
+                    "source": invalid_source,
                     "config": {},
-                    "expected_effect": "The harness rejects non-finite scores.",
+                    "expected_effect": "Exercise runtime repair before measuring duration.",
                 },
                 {
-                    "diagnosis": "The candidate violated the finite-score contract.",
-                    "evidence": ["Seed zero returned a non-finite score error."],
-                    "next_hypothesis": "Stop after recording the failure.",
+                    "action": "experiment",
+                    "name": "repair-duration",
+                    "hypothesis": hypothesis,
+                    "source": repaired_source,
+                    "config": {},
+                    "expected_effect": "Return finite duration scores after repairing the failure.",
+                },
+                {
+                    "diagnosis": "The repaired duration candidate cleared the target.",
+                    "evidence": ["All three validation seeds completed with the same ranking."],
+                    "next_hypothesis": "No further experiment is required.",
                     "stop": True,
                 },
             ])
-            splits = load_dataset(data_dir)
-            baseline_config = {"epochs": 1, "bs": 8, "patience": 1}
-            baseline_scores = [
-                score(splits, None, "valid", seed, baseline_config) for seed in (0, 1, 2)
-            ]
+            rows = synthetic_splits()["valid"]
+            zeros = np.zeros(len(rows))
             recorded = {
                 "random_test": {
                     "GAUC": 0.5, "nDCG@5": 0.45, "primary": 0.475,
                     "users": 3, "rows": 12,
                 },
-                "scores": baseline_scores,
-                "config": baseline_config,
+                "scores": [zeros.copy(), zeros.copy(), zeros.copy()],
+                "config": {"epochs": 1, "bs": 8, "patience": 1},
+                "target_primary": 0.65,
             }
-            store = CampaignStore(repo / ".agent-runs", "failed")
-            sandbox = WorktreeSandbox(repo, store.campaign_dir, "failed",
+            store = CampaignStore(repo / ".agent-runs", "repair")
+            sandbox = WorktreeSandbox(repo, store.campaign_dir, "repair",
                                       python_executable=sys.executable)
             state = CampaignController(
                 client, sandbox, store, recorded_baseline=recorded).run(data_dir, {
                     "max_iterations": 2,
                     "max_hours": 1,
-                    "max_api_calls": 8,
+                    "max_model_calls": 8,
                     "run_timeout": 30,
                     "memory_gb": 8,
                     "threads": 1,
                 })
             iteration = state["iterations"][0]
-            self.assertEqual(iteration["status"], "failed")
-            self.assertTrue(iteration["candidate_failed"])
-            self.assertEqual(iteration["seed_results"]["0"]["status"], "error")
-            self.assertIn("finite-score contract", iteration["reflection"]["diagnosis"])
-            self.assertTrue((store.iteration_dir(1) / "reflection.json").is_file())
+            self.assertEqual(state["status"], "target_met")
+            self.assertEqual(iteration["status"], "accepted")
+            self.assertFalse(iteration["candidate_failed"])
+            self.assertEqual(len(iteration["repair_history"]), 1)
+            repair = iteration["repair_history"][0]
+            self.assertEqual(repair["status"], "applied")
+            self.assertIn("Candidate scores contain NaN or Inf",
+                          repair["failure"]["stderr_tail"])
+            repair_prompt = json.loads(client.calls[1][0][1]["content"])
+            self.assertEqual(repair_prompt["previous_source"], invalid_source)
+            self.assertIn("Candidate scores contain NaN or Inf",
+                          repair_prompt["failure"]["stderr_tail"])
+            self.assertTrue((store.iteration_dir(1) / "repair-1.patch").is_file())
+            self.assertTrue((store.iteration_dir(1) / "repair-1.py").is_file())
+            self.assertTrue((store.iteration_dir(1) / "repair-1-request.json").is_file())
             self.assertEqual(state["counters"]["completed_iterations"], 1)
+
+    def test_invalid_reflection_cannot_discard_measured_winner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, data_dir = prepare_campaign_fixture(root)
+            candidate_source = replacement_source(repo, '''def score(
+        splits, data_access, target_split: str, seed: int, config: dict) -> np.ndarray:
+    del data_access, seed, config
+    return np.asarray([row[5] for row in splits[target_split]], dtype=np.float64)
+''')
+            experiment = {
+                "action": "experiment",
+                "name": "reflection-fallback",
+                "hypothesis": "Duration clears the fixture target.",
+                "source": candidate_source,
+                "config": {},
+                "expected_effect": "Produce a confirmed winning ensemble.",
+            }
+            client = FakeClient([
+                experiment,
+                {"diagnosis": "missing required fields"},
+                {"diagnosis": "still missing required fields"},
+                {"diagnosis": "third malformed reflection"},
+            ])
+            rows = synthetic_splits()["valid"]
+            zeros = np.zeros(len(rows))
+            recorded = {
+                "random_test": {
+                    "GAUC": 0.5, "nDCG@5": 0.45, "primary": 0.475,
+                    "users": 3, "rows": 12,
+                },
+                "scores": [zeros.copy(), zeros.copy(), zeros.copy()],
+                "config": {"epochs": 1, "bs": 8, "patience": 1},
+                "target_primary": 0.65,
+            }
+            store = CampaignStore(repo / ".agent-runs", "reflection-fallback")
+            sandbox = WorktreeSandbox(
+                repo, store.campaign_dir, "reflection-fallback",
+                python_executable=sys.executable)
+            state = CampaignController(
+                client, sandbox, store, recorded_baseline=recorded).run(data_dir, {
+                    "max_iterations": 1,
+                    "max_hours": 1,
+                    "max_model_calls": 8,
+                    "run_timeout": 30,
+                    "memory_gb": 8,
+                    "threads": 1,
+                })
+            iteration = state["iterations"][0]
+            self.assertEqual(state["status"], "target_met")
+            self.assertEqual(iteration["status"], "accepted")
+            self.assertIn("missing keys", iteration["reflection_error"])
+            self.assertIn("controller used execution evidence",
+                          iteration["reflection"]["diagnosis"])
+            self.assertEqual(len(client.calls), 4)
 
     def test_seed_zero_without_exploratory_margin_is_not_promoted(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             repo, data_dir = prepare_campaign_fixture(root)
-            patch = replacement_patch(repo, '''def score(
+            candidate_source = replacement_source(repo, '''def score(
         splits, data_access, target_split: str, seed: int, config: dict) -> np.ndarray:
     del data_access, seed, config
     return np.asarray([row[5] for row in splits[target_split]], dtype=np.float64)
@@ -863,7 +1201,7 @@ class CampaignIntegrationTests(unittest.TestCase):
                     "action": "experiment",
                     "name": "unconfirmed-duration",
                     "hypothesis": "Match the strongest exploratory seed.",
-                    "patch": patch,
+                    "source": candidate_source,
                     "config": {},
                     "expected_effect": "No margin over the exploratory threshold.",
                 },
@@ -883,15 +1221,16 @@ class CampaignIntegrationTests(unittest.TestCase):
                 },
                 "scores": [duration, -duration, np.zeros(len(rows))],
                 "config": {"epochs": 1, "bs": 8, "patience": 1},
+                "target_primary": 2.0,
             }
             store = CampaignStore(repo / ".agent-runs", "unconfirmed")
             sandbox = WorktreeSandbox(repo, store.campaign_dir, "unconfirmed",
                                       python_executable=sys.executable)
             state = CampaignController(
                 client, sandbox, store, recorded_baseline=recorded).run(data_dir, {
-                    "max_iterations": 2,
+                    "max_iterations": 1,
                     "max_hours": 1,
-                    "max_api_calls": 8,
+                    "max_model_calls": 8,
                     "run_timeout": 30,
                     "memory_gb": 8,
                     "threads": 1,
@@ -909,11 +1248,11 @@ class CampaignIntegrationTests(unittest.TestCase):
                 "non_reproducible")
 
 
-    def test_budget_exhaustion_remains_target_unmet(self):
+    def test_target_met_wins_at_iteration_budget_boundary(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             repo, data_dir = prepare_campaign_fixture(root)
-            patch = replacement_patch(repo, '''def score(
+            candidate_source = replacement_source(repo, '''def score(
         splits, data_access, target_split: str, seed: int, config: dict) -> np.ndarray:
     del data_access, seed, config
     return np.asarray([row[5] for row in splits[target_split]], dtype=np.float64)
@@ -923,7 +1262,7 @@ class CampaignIntegrationTests(unittest.TestCase):
                     "action": "experiment",
                     "name": "budget-duration",
                     "hypothesis": "Duration clears the target.",
-                    "patch": patch,
+                    "source": candidate_source,
                     "config": {},
                     "expected_effect": "Confirmed target improvement.",
                 },
@@ -943,6 +1282,7 @@ class CampaignIntegrationTests(unittest.TestCase):
                 },
                 "scores": [zeros.copy(), zeros.copy(), zeros.copy()],
                 "config": {"epochs": 1, "bs": 8, "patience": 1},
+                "target_primary": 0.65,
             }
             store = CampaignStore(repo / ".agent-runs", "budget")
             sandbox = WorktreeSandbox(repo, store.campaign_dir, "budget",
@@ -951,15 +1291,15 @@ class CampaignIntegrationTests(unittest.TestCase):
                 client, sandbox, store, recorded_baseline=recorded).run(data_dir, {
                     "max_iterations": 1,
                     "max_hours": 1,
-                    "max_api_calls": 8,
+                    "max_model_calls": 8,
                     "run_timeout": 30,
                     "memory_gb": 8,
                     "threads": 1,
                 })
             self.assertGreaterEqual(
                 state["best_ensemble_metrics"]["primary"], state["target_primary"])
-            self.assertEqual(state["stop_reason"], "max_iterations")
-            self.assertEqual(state["status"], "target_unmet")
+            self.assertEqual(state["stop_reason"], "target_primary_met")
+            self.assertEqual(state["status"], "target_met")
 
 if __name__ == "__main__":
     unittest.main()

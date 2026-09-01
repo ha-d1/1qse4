@@ -335,7 +335,7 @@ class WorktreeSandbox:
             raise SandboxError(f"Iteration worktree does not exist: {worktree}")
         paths = self._patch_paths(patch)
         self._validate_paths(worktree, paths)
-        encoded = patch.encode("utf-8")
+        encoded = (patch if patch.endswith("\n") else patch + "\n").encode("utf-8")
         self._git(["apply", "--check", "--recount", "-"], cwd=worktree, input_bytes=encoded)
         numstat = self._git(["apply", "--numstat", "--recount", "-"], cwd=worktree,
                             input_bytes=encoded).stdout.decode("utf-8", "replace")
@@ -380,15 +380,18 @@ class WorktreeSandbox:
 
     def run_candidate(self, worktree, candidate_module, candidate_commit, data_dir, target_split,
                       seed, config, output_dir, stdout_path, stderr_path, timeout=900,
-                      memory_gb=8, threads=4):
+                      memory_gb=8, threads=4, candidate_data_dir=None):
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        if candidate_data_dir is None:
+            raise ValueError("candidate_data_dir is required")
         argv = [
             self.python_executable, "experiment.py", "run",
             "--candidate-module", candidate_module,
             "--candidate-commit", candidate_commit,
             "--data_dir", str(Path(data_dir).resolve()),
-            "--target-split", target_split,
+            "--evaluation-split", target_split,
+            "--candidate-data-dir", str(Path(candidate_data_dir).resolve()),
             "--seed", str(seed),
             "--config-json", json.dumps(config, separators=(",", ":"), sort_keys=True),
             "--output-dir", str(output_dir.resolve()),
