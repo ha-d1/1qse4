@@ -19,7 +19,7 @@ SYSTEM_PROMPT = (
     "For model-side selection, construct a deterministic temporal holdout only from splits['train']; fit on 20220408-20220418 and select on 20220419-20220421.",
     "The baseline API is fit_fm(splits, k=16, lr=0.001, epochs=40, bs=8192, patience=4, seed=0, verbose=True). Never pass unsupported keywords. Calling it on the supplied masked valid split cannot perform meaningful early stopping.",
     "data_access.iter_rows(filename, columns_tuple, split='train' or target_split) exposes sanitized non-label CSV columns. The long_view label is deliberately rejected.",
-    "Candidate code has no network, download, subprocess, or direct filesystem access. Use only the supplied splits and data_access interface.",
+    "Candidate code may use any Python package or system module already installed in the candidate environment. It may not install packages, access the network, download data, spawn subprocesses, or bypass the supplied data_access interface.",
     "Implement every behavioral change in the returned complete solution.py source. Config is passed unchanged to score and is metadata unless candidate code reads it.",
     "Do not reimplement or modify metrics, split dates, row identity, the executor, or protected files.",
     "A repair request contains the complete previous source, execution status, and bounded stdout, stderr, and traceback tails. Preserve working code, fix the diagnosed cause, and return the complete corrected source rather than rewriting unrelated logic.",
@@ -28,8 +28,8 @@ SYSTEM_PROMPT = (
 )
 
 CANDIDATE_CONSTRAINTS = (
-    "The candidate environment is NumPy-only unless dependencies.lightgbm_version is non-null.",
-    "Use only Python standard library modules accepted by the sandbox, numpy, baseline, data, and explicitly available dependencies; never import pandas, torch, sklearn, or scipy.",
+    "The candidate may use any Python package or system module already installed in the candidate environment.",
+    "Use standard-library modules, numpy, baseline, data, and installed third-party dependencies declared by the project; never install packages, access the network, download data, spawn subprocesses, or bypass the supplied data_access interface.",
     "Return complete executable solution.py source in the experiment action's source field, with no Markdown fence, patch, diff, commentary, TODO, placeholder, or ellipsis.",
     "Keep the first experiment implementation small and self-contained.",
     "On source validation failure, correct the supplied source; do not repeat it or inspect again.",

@@ -1,4 +1,8 @@
 import numpy as np
+try:
+    import lightgbm as _lgb
+except ImportError:
+    _lgb = None
 
 from baseline import fit_fm
 
@@ -239,6 +243,62 @@ def _pairwise_delta(x_train, y_train, base_train, x_target, seed, config):
     return np.clip(output / scale, -4.0, 4.0)
 
 
+def _lightgbm_residual(x_train, y_train, base_train, x_target, seed, config):
+    """Fit a train-only LambdaRank correction on top of the current score."""
+    if _lgb is None:
+        return np.zeros(np.asarray(x_target).shape[0], dtype=np.float64)
+    x_train = np.asarray(x_train)
+    x_target = np.asarray(x_target)
+    y_train = np.asarray(y_train, dtype=np.float64).reshape(-1)
+    base_train = np.asarray(base_train, dtype=np.float64).reshape(-1)
+    if x_train.ndim != 2 or x_target.ndim != 2:
+        return np.zeros(x_target.shape[0] if x_target.ndim else 0, dtype=np.float64)
+    if (x_train.shape[0] != y_train.size or x_train.shape[0] != base_train.size
+            or x_train.shape[1] != x_target.shape[1] or x_train.shape[0] < 4):
+        return np.zeros(x_target.shape[0], dtype=np.float64)
+    if not np.isfinite(y_train).all() or not np.isfinite(base_train).all():
+        return np.zeros(x_target.shape[0], dtype=np.float64)
+    order = np.argsort(x_train[:, 0], kind='mergesort')
+    ordered_users = x_train[order, 0]
+    boundaries = np.flatnonzero(ordered_users[1:] != ordered_users[:-1]) + 1
+    groups = np.diff(np.r_[0, boundaries, len(order)])
+    rounds = max(1, int(config.get('lgb_rounds', 150)))
+    learning_rate = float(config.get('lgb_lr', 0.05))
+    leaves = max(2, int(config.get('lgb_num_leaves', 31)))
+    min_data = max(1, int(config.get('lgb_min_data_in_leaf', 100)))
+    lambda_l2 = max(0.0, float(config.get('lgb_lambda_l2', 1.0)))
+    threads = max(1, int(config.get('lgb_threads', 4)))
+    params = {
+        'objective': 'lambdarank',
+        'metric': 'ndcg',
+        'ndcg_at': [5],
+        'learning_rate': learning_rate,
+        'num_leaves': leaves,
+        'min_data_in_leaf': min_data,
+        'lambda_l2': lambda_l2,
+        'verbosity': -1,
+        'seed': int(seed),
+        'feature_fraction_seed': int(seed),
+        'bagging_seed': int(seed),
+        'data_random_seed': int(seed),
+        'num_threads': threads,
+        'feature_pre_filter': False,
+        'deterministic': True,
+        'force_col_wise': True,
+    }
+    train_set = _lgb.Dataset(
+        x_train[order],
+        label=y_train[order],
+        group=groups,
+        init_score=base_train[order],
+        categorical_feature=list(range(x_train.shape[1])),
+        free_raw_data=False,
+    )
+    booster = _lgb.train(params, train_set, num_boost_round=rounds)
+    correction = np.asarray(booster.predict(x_target), dtype=np.float64).reshape(-1)
+    return np.nan_to_num(correction, nan=0.0, posinf=0.0, neginf=0.0)
+
+
 def score(splits, data_access, target_split: str, seed: int, config: dict) -> np.ndarray:
     params = {name: config[name] for name in ('k', 'lr', 'epochs', 'bs', 'patience') if name in config}
     params['seed'] = seed
@@ -256,4 +316,14 @@ def score(splits, data_access, target_split: str, seed: int, config: dict) -> np
     blend = float(config.get('watch_blend', 0.085))
     pair_blend = float(config.get('pair_blend', 0.8))
     result = residual + blend * watch + pair_blend * pairwise
+    lightgbm_blend = float(config.get('lightgbm_blend', 0.5))
+    if not np.isfinite(lightgbm_blend):
+        raise ValueError('lightgbm_blend must be finite')
+    if _lgb is not None and lightgbm_blend != 0.0:
+        train_residual = _field_prior_adjustment(encoded, 'train', base_train)
+        train_watch = _watch_residual(data_access, 'train', base_train.size)
+        train_pairwise = _pairwise_delta(x_train, y_train, base_train, x_train, seed, config)
+        current_train = train_residual + blend * train_watch + pair_blend * train_pairwise
+        result += lightgbm_blend * _lightgbm_residual(
+            x_train, y_train, current_train, x_target, seed, config)
     return np.nan_to_num(result, nan=0.0, posinf=30.0, neginf=-30.0)

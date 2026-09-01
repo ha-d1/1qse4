@@ -2,18 +2,28 @@
 
 ## Dependencies
 
-The base starter kit requires Python 3.9+ and NumPy only:
+The core starter kit runs with Python 3.9+ and NumPy only:
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-The optional campaign controller additionally requires:
+Research code is deliberately open to additional Python packages and system modules. Any library
+is welcome when it improves the ranking objective or experiment workflow; declare it in the
+appropriate requirements file and keep the default CLI reproducible. The controller does not
+install dependencies during a campaign.
+
+The optional campaign controller uses:
 
 - a current [Codex CLI](https://github.com/openai/codex);
 - a cached ChatGPT login created with `codex login`; and
-- `python3 -m pip install -r requirements-agent.txt` only when candidate models need
-  the existing optional LightGBM dependency.
+- `requirements-agent.txt` for the optional LightGBM dependency used by the current winner.
+
+Install the optional model dependencies with:
+
+```bash
+python3 -m pip install -r requirements-agent.txt
+```
 
 The Codex transport uses only Python standard-library modules, so it adds no Python dependency.
 The controller never installs packages.
@@ -64,10 +74,10 @@ The campaign target is a strict improvement over the published `0.6016` validati
 `0.002` epsilon remains the convergence threshold; it does not move the target upward whenever a
 new campaign starts from an already improved solution.
 
-The current `solution.py` was certified by a complete three-seed campaign at validation
-`GAUC=0.668875`, `nDCG@5=0.535752`, `primary=0.602314`, above the published FM validation
-baseline `0.601600`. Finalization regenerated all validation scores, generated three test-seed
-score files, and passed the 170,588-row submission alignment check.
+The current `solution.py` produced the latest three-seed validation result with LightGBM 4.7.0:
+`GAUC=0.668594`, `nDCG@5=0.536175`, `primary=0.602384`. This is a `0.000071` gain over
+the previous NumPy-only ensemble primary of `0.602314`. Test labels remain hidden; test-seed
+generation and submission alignment are checked separately without reporting a test metric.
 
 Confirm the CLI version, log in once, verify the cached authentication, and pass the model explicitly:
 
@@ -99,10 +109,11 @@ python3 agent.py run \
   --codex-prefix-arg /path/to/codex.js
 ```
 
-The candidate boundary remains NumPy-only unless LightGBM was installed from
-`requirements-agent.txt`. Campaign state, patches, structured request/response records, logs, and
-the checked final submission are written under `.agent-runs/<campaign>/`. Candidate worktrees under
-`.agent-worktrees/` are disposable; the main checkout is not modified. `resume` requires the
+Candidate code may use any installed Python package or system module, not only NumPy or the
+standard library. Dependencies must be installed before the campaign; candidate code cannot
+install packages, access the network, or download data. Campaign state, patches, structured
+request/response records, logs, and the checked final submission are written under
+`.agent-runs/<campaign>/`. Candidate worktrees under `.agent-worktrees/` are disposable; the main checkout is not modified. `resume` requires the
 original dataset fingerprint and the same Codex CLI version and model; persisted campaign limits,
 including `max_model_calls`, remain in force. Older provider-backed campaign state is not migrated;
 start a new campaign ID after this transport cutover.
@@ -200,11 +211,23 @@ Reason: the `user_id × video_id` interaction already captures most of the learn
 
 ⚠️ Also note: **the first-order contribution of purely user-side features to the score is always 0.** Because ranking is performed within each user, any term that is constant within a user does not change the within-group ordering (experimentally, `item_pop × user bias` produces scores identical to plain `item_pop`). User-side features can only work through **interaction terms with item-side features**.
 
-### Not Yet Explored: The Headroom Should Be Here
+### Current library-backed improvement
 
-Ordered by our estimated likelihood (**the organizers have not tested these; they are for you to explore**):
+The current `solution.py` optionally trains a LightGBM LambdaRank model on the train split and
+uses its residual as a correction to the existing FM, field-prior, watch-duration, and pairwise
+score. This is a train-only ranking objective with no validation or test labels exposed to the
+candidate. If LightGBM is unavailable, the candidate falls back to the NumPy-only score.
 
-1. **Change the loss function.** The current loss is pointwise logloss, but the metrics (GAUC / nDCG) are **ranking metrics**. Switch to pairwise (BPR) or listwise (softmax over each user's exposures) to align the objective with evaluation. This is the approach we consider most likely to work.
+Other libraries are welcome. Suitable candidates include LightGBM, XGBoost, CatBoost, PyTorch,
+SciPy, and custom native modules, provided they are declared as dependencies, available before
+execution, and preserve the fixed `evaluate.py` contract and train-only model selection.
+
+### Remaining directions
+
+The LightGBM LambdaRank residual is the first library-backed ranking experiment. The directions
+below remain available for exploration, ordered by estimated likelihood:
+
+1. **Ranking losses.** Improve the current pairwise and LambdaRank objectives with harder negatives, field-specific models, or better schedules.
 2. **User history sequences.** The current features **do not use behavioral sequences at all**. Each KuaiRand user has hundreds to thousands of interactions in train, leaving DIN / SIM-style interest modeling completely unexplored.
 3. **Multi-objective learning.** The logs also contain `is_click`, `is_like`, `is_follow`, `is_comment`, `is_forward`, and `play_time_ms`, which can be used as auxiliary tasks for the primary `long_view` task.
 4. **Model watch duration.** This is precisely CWM's contribution: it models watch duration as **censored regression** (when a video finishes, the true viewing duration is truncated, so a one-sided loss is used instead of squared error). This is a research-rich direction.
@@ -242,7 +265,7 @@ as long as you ultimately pass `scores` to `evaluate()`. **The scoring conventio
 | `baseline_scores.json` | Officially published scores + seed variance + convergence parameters. |
 | `submit.py` | Generate / validate submission files. |
 | `ablation_features.py` | Feature ablation experiment that reproduces the “adding features produces no gain” numbers. |
-| `solution.py` | Current campaign winner: FM plus train-field, watch-duration, and within-user pairwise ranking adjustments. |
+| `solution.py` | Current campaign winner: FM plus train-field, watch-duration, within-user pairwise, and optional LightGBM LambdaRank adjustments. |
 | `experiment.py` | Trusted data profiler, candidate runner, score validator, and ensemble submission writer. |
 | `agent.py` | Campaign CLI and inspect → experiment → reflect controller. |
 | `agent_codex.py` | Standard-library, stateless Codex CLI client using cached ChatGPT authentication. |
