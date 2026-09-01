@@ -272,6 +272,18 @@ as long as you ultimately pass `scores` to `evaluate()`. **The scoring conventio
 > and its loss optimizes counterfactual watch time while the evaluation label is a reconstructed `long_view2`.
 > It is research code for a watch-duration debiasing paper and can serve as **advanced reference material**, but it is not recommended as a starting point.
 
+## Competition Deliverables
+
+- [`DEVPOST_DESCRIPTION.md`](DEVPOST_DESCRIPTION.md) — project description, tools, APIs, libraries, datasets, results, reproduction, and limitations.
+- [`RUN_LOG.md`](RUN_LOG.md) — per-iteration hypotheses, diffs, metrics, failures, recovery events, autonomy count, and resource accounting.
+- [`RESULTS_SUMMARY.md`](RESULTS_SUMMARY.md) — final validation table, baseline deltas, submission commands, and output checksums.
+
+### Team contributions
+
+This repository is prepared as a solo submission with agent-assisted implementation. The project
+owner set the objective, reviewed measured outcomes, and directed the deliverables. The Codex agent
+implemented the scoring, experiment-harness, validation, and documentation changes.
+
 ## Files
 
 | | |
