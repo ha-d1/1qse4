@@ -83,7 +83,3 @@ To reproduce a candidate directly, use `experiment.py run` for seeds 0, 1, and 2
 - The temporal screen is intentionally conservative and opt-in because the combined screen/features/hard-negative experiment regressed validation.
 - XGBoost's tested ranking objective underperformed LightGBM on the available validation split.
 - More time would go to sequence modeling, calibrated multi-objective watch-duration training, richer author/video interactions, and multiple independent temporal validation windows.
-
-## Contributions
-
-This is a solo submission with agent-assisted implementation. The project owner defined the target, reviewed experiment outcomes, and directed the deliverables. The Codex agent implemented the data-safe scoring changes, experiment harness updates, documentation, and validation workflow.
